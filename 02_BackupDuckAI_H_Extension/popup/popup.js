@@ -848,8 +848,80 @@ function updateProgress(current, total, message = '') {
 }
 
 // Event listeners
+// FULL BACKUP BUTTON: Load conversations with full content AND download them all
 refreshBtn.addEventListener('click', async () => {
-  await loadConversations();
+  try {
+    statusEl.textContent = '🔄 Starting Full Backup - loading conversations...';
+    showProgress();
+    
+    // Step 1: Load all conversations with full content (auto-click mode)
+    await loadConversations();
+    
+    // Check if we got any conversations
+    if (!conversationData || conversationData.length === 0) {
+      statusEl.textContent = '⚠️ No conversations found on this page';
+      hideProgress();
+      return;
+    }
+    
+    // Step 2: Auto-select all conversations
+    items = items.map(i => ({ ...i, checked: true }));
+    await renderTitlesOnly();
+    
+    statusEl.textContent = `✓ Loaded ${conversationData.length} conversations - starting download...`;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Step 3: Download all selected conversations
+    const checkedItems = items.filter(item => item.checked);
+    
+    if (checkedItems.length === 0) {
+      statusEl.textContent = 'No items selected for download';
+      hideProgress();
+      return;
+    }
+    
+    statusEl.textContent = `🔄 Downloading ${checkedItems.length} conversations...`;
+    
+    const downloadResults = [];
+
+    for (let i = 0; i < checkedItems.length; i++) {
+      const item = checkedItems[i];
+      const conversation = conversationData[item.index];
+
+      if (conversation) {
+        updateProgress(i + 1, checkedItems.length, `Downloading: ${conversation.title.substring(0, 30)}...`);
+
+        const result = await downloadSingleConversation(conversation, i, checkedItems.length);
+        downloadResults.push(result);
+
+        // Delay between downloads
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    await addToBackupHistory(checkedItems.map(item => conversationData[item.index]));
+    
+    // Clear cache after backup
+    console.log('Clearing cache after backup for accurate status on next load...');
+    await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    usingCachedData = false;
+
+    const duplicateCount = downloadResults.filter(r => r.isDuplicate).length;
+    const upgradeCount = downloadResults.filter(r => r.isUpgrade).length;
+    const newCount = checkedItems.length - duplicateCount - upgradeCount;
+
+    let summary = `✅ Full Backup Complete! `;
+    if (newCount > 0) summary += `${newCount} new, `;
+    if (upgradeCount > 0) summary += `${upgradeCount} upgraded, `;
+    if (duplicateCount > 0) summary += `${duplicateCount} duplicates`;
+
+    statusEl.textContent = summary;
+    hideProgress();
+  } catch (error) {
+    console.error('Error during full backup:', error);
+    statusEl.textContent = `❌ Error: ${error.message}`;
+    hideProgress();
+  }
 });
 
 // Auto-load on extension open (TITLES ONLY for speed)
@@ -1689,14 +1761,38 @@ async function downloadSingleConversation(conversation, index, total) {
 }
 
 document.getElementById('downloadButton').addEventListener('click', async () => {
+  // AUTO-LOAD if no conversations are loaded yet
+  if (!conversationData || conversationData.length === 0) {
+    statusEl.textContent = '⚡ Quick Download - loading conversations...';
+    showProgress();
+    
+    try {
+      await loadTitlesOnly(); // Load titles quickly
+      
+      if (!conversationData || conversationData.length === 0) {
+        statusEl.textContent = '⚠️ No conversations found on this page';
+        hideProgress();
+        return;
+      }
+      
+      // Auto-select all conversations
+      items = items.map(i => ({ ...i, checked: true }));
+      await renderTitlesOnly();
+      
+      statusEl.textContent = `✓ Loaded ${conversationData.length} conversations`;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      console.error('Error loading conversations:', error);
+      statusEl.textContent = `❌ Error: ${error.message}`;
+      hideProgress();
+      return;
+    }
+  }
+  
   const checkedItems = items.filter(item => item.checked);
   if (checkedItems.length === 0) {
     statusEl.textContent = 'No items selected for download';
-    return;
-  }
-
-  if (!conversationData || conversationData.length === 0) {
-    statusEl.textContent = 'Please load chat titles first';
+    hideProgress();
     return;
   }
 
@@ -1820,12 +1916,32 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
 // NEW: Enhanced Backup Status Viewer with Outdated Detection
 document.getElementById('viewBackupStatus').addEventListener('click', async () => {
   try {
-    const downloadedFiles = await checkLocalDownloadedFiles();
-    
+    // AUTO-LOAD if no conversations are loaded yet
     if (!conversationData || conversationData.length === 0) {
-      statusEl.textContent = 'Please load conversations first';
-      return;
+      statusEl.textContent = '📊 Loading conversations for status check...';
+      showProgress();
+      
+      try {
+        await loadTitlesOnly(); // Load titles quickly
+        
+        if (!conversationData || conversationData.length === 0) {
+          statusEl.textContent = '⚠️ No conversations found on this page';
+          hideProgress();
+          return;
+        }
+        
+        statusEl.textContent = `✓ Loaded ${conversationData.length} conversations`;
+        hideProgress();
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (error) {
+        console.error('Error loading conversations:', error);
+        statusEl.textContent = `❌ Error: ${error.message}`;
+        hideProgress();
+        return;
+      }
     }
+    
+    const downloadedFiles = await checkLocalDownloadedFiles();
     
     // Analyze current conversation status
     const statusCounts = {
