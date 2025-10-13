@@ -1,0 +1,25 @@
+/* Docs/styles.css */
+h3 {
+    color: deeppink;
+    font-weight: 700;
+    font-size: 20px;
+}
+h4 {
+    color: lightblue;
+    font-weight: 700;
+    font-size: 16px;
+}
+code {
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+.heading3 {
+    color: red;
+    
+}
+.heading4 {
+    color: blue;
+    font-weight: 700;
+    font-size: 30px;
+}

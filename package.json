@@ -1,0 +1,15 @@
+{
+  "name": "md-lint-example",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "lint:md": "remark . --quiet",
+    "fix:md": "remark . -o"
+  },
+  "devDependencies": {
+    "remark-cli": "^12.0.1",
+    "remark-lint": "^9.1.2",
+    "remark-preset-lint-recommended": "^4.0.1"
+  }
+}

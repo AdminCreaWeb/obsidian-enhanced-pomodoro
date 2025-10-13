@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <style>
+            body {
+                font-family:
+                    system-ui,
+                    Segoe UI,
+                    Roboto,
+                    sans-serif;
+                padding: 12px;
+                width: 420px;
+                min-height: 400px;
+                max-width: 500px;
+                overflow-x: auto;
+            }
+            .controls {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-bottom: 8px;
+                align-items: center;
+            }
+            #list {
+                margin: 8px 0;
+                padding: 0;
+            }
+            #list li {
+                margin-bottom: 8px;
+                line-height: 1.3;
+                list-style: none;
+                border: 1px solid #e1e5e9;
+                border-radius: 4px;
+                padding: 6px;
+                background: #f8f9fa;
+            }
+            #list li:hover {
+                background: #e9ecef;
+            }
+            #list label {
+                display: flex;
+                align-items: flex-start;
+                cursor: pointer;
+                gap: 8px;
+            }
+            #list input[type="checkbox"] {
+                margin: 2px 0 0 0;
+                flex-shrink: 0;
+            }
+            .title-text {
+                flex: 1;
+                font-size: 0.9em;
+                line-height: 1.3;
+                max-height: 2.6em; /* Approximately 2 lines */
+                overflow: hidden;
+                word-wrap: break-word;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+            }
+            #status {
+                font-size: 0.85em;
+                color: #666;
+                margin: 8px 0;
+                min-height: 1.2em;
+            }
+            button {
+                font-size: 0.85em;
+                padding: 6px 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background: #f5f5f5;
+                cursor: pointer;
+                white-space: nowrap;
+                min-width: fit-content;
+            }
+            button:hover {
+                background: #e9ecef;
+            }
+            #clearCache, #viewHistory, #clearHistory, #testStructure {
+                font-size: 0.75em !important;
+                padding: 4px 8px !important;
+                color: #666;
+                flex: 0 0 auto;
+            }
+            #clearHistory {
+                color: #dc3545 !important;
+            }
+            #testStructure {
+                color: #28a745 !important;
+            }
+            .progress-wrapper {
+                margin: 8px 0;
+                display: none;
+                animation: fadeIn 0.3s ease-in;
+            }
+            .progress-wrapper.show {
+                display: block;
+            }
+            .progress-container {
+                width: 100%;
+                background-color: #e0e0e0;
+                border-radius: 6px;
+                height: 14px;
+                overflow: hidden;
+                position: relative;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.15);
+                border: 1px solid #d0d0d0;
+            }
+            .progress-bar {
+                height: 100%;
+                background: linear-gradient(90deg, #28a745, #20c997, #17a2b8);
+                border-radius: 5px;
+                width: 0%;
+                transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+                position: relative;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0, 123, 255, 0.3);
+            }
+            .progress-bar::after {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                right: 0;
+                background: linear-gradient(
+                    45deg,
+                    rgba(255, 255, 255, 0.2) 25%,
+                    transparent 25%,
+                    transparent 50%,
+                    rgba(255, 255, 255, 0.2) 50%,
+                    rgba(255, 255, 255, 0.2) 75%,
+                    transparent 75%,
+                    transparent
+                );
+                background-size: 16px 16px;
+                animation: progress-stripes 1s linear infinite;
+            }
+            .progress-text {
+                font-size: 0.75em;
+                color: #666;
+                margin-top: 6px;
+                text-align: center;
+                font-weight: 500;
+                letter-spacing: 0.5px;
+            }
+            @keyframes progress-stripes {
+                0% {
+                    background-position: 0 0;
+                }
+                100% {
+                    background-position: 16px 0;
+                }
+            }
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(-10px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="controls">
+            <button id="toggleAll">Toggle All</button>
+            <button
+                id="refresh"
+                title="Single-click to load (may use cache), Double-click to force refresh"
+            >
+                Load Chat-titles
+            </button>
+            <button id="downloadButton">Download .md</button>
+        </div>
+        <div class="controls">
+            <button id="clearCache">Clear Cache</button>
+            <button id="viewHistory">View History</button>
+            <button id="clearHistory">Clear History</button>
+            <button id="testStructure">🔍 Debug Page</button>
+        </div>
+
+        <div id="status" aria-live="polite"></div>
+        <div class="progress-wrapper" id="progressWrapper">
+            <div class="progress-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-text" id="progressText">0%</div>
+        </div>
+        <ul id="list"></ul>
+
+        <div id="historyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 1000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 8px; padding: 20px; min-width: 450px; max-width: 90vw; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+                <h3 style="margin-top: 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px;">Backup History</h3>
+                <div id="historyList" style="margin: 15px 0; max-height: 400px; overflow-y: auto; font-size: 0.85em;"></div>
+                <div style="text-align: right; margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee;">
+                    <button id="closeHistory" style="background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Close</button>
+                </div>
+            </div>
+        </div>
+</ul>
+
+        <script src="../lib/jsencrypt.min.js"></script>
+        <script src="../lib/crypto-js.min.js"></script>
+        <script src="popup.js"></script>
+    </body>
+</html>

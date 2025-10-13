@@ -1,0 +1,13 @@
+  {
+    "manifest_version": 3,
+    "name": "DuckDuckGo AI Backup",
+    "version": "1.0",
+    "permissions": ["storage", "activeTab", "scripting"],
+    "action": {
+      "default_popup": "popup.html"
+    },
+    "background": {
+      "scripts": ["background.js"]
+    }
+  }
+  
