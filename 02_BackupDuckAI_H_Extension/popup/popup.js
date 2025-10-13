@@ -1702,6 +1702,24 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
 
   const fullBackupMode = document.getElementById('fullBackupMode').checked;
   
+  // WARN about Quick Download limitation
+  if (!fullBackupMode) {
+    const partialCount = conversationData.filter(c => c.contentSource !== 'main_content').length;
+    if (partialCount > 0) {
+      const proceed = confirm(
+        `⚠️ QUICK DOWNLOAD LIMITATION\n\n` +
+        `${partialCount} of ${conversationData.length} conversations will be PARTIAL backups (title only).\n\n` +
+        `Only the currently open conversation has full content.\n\n` +
+        `💡 Use "Full Backup (Auto-Click Mode)" for complete backups.\n\n` +
+        `Continue with Quick Download anyway?`
+      );
+      if (!proceed) {
+        statusEl.textContent = 'Quick download cancelled - use Full Backup for complete content';
+        return;
+      }
+    }
+  }
+  
   // NEW: Check if we need to load full content first
   if (conversationData.length > 0) {
     const hasFullContent = conversationData.some(c => c.contentSource === 'main_content');

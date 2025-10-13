@@ -79,6 +79,22 @@
             button:hover {
                 background: #e9ecef;
             }
+            /* PRIMARY BUTTON - Full Backup */
+            #refresh {
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                color: white;
+                border: 1px solid #1e7e34;
+                font-weight: 600;
+                font-size: 0.9em;
+                padding: 8px 14px;
+                box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3);
+                flex: 1;
+                min-width: 180px;
+            }
+            #refresh:hover {
+                background: linear-gradient(135deg, #218838 0%, #1aa179 100%);
+                box-shadow: 0 3px 6px rgba(40, 167, 69, 0.4);
+            }
             #clearCache, #viewHistory, #clearHistory, #testStructure {
                 font-size: 0.75em !important;
                 padding: 4px 8px !important;
@@ -168,15 +184,25 @@
         </style>
     </head>
     <body>
-        <div class="controls">
-            <button id="toggleAll">Toggle All</button>
+        <!-- PRIMARY ACTION: Full Backup -->
+        <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #e8f5e9 0%, #e0f7fa 100%); border: 2px solid #28a745; border-radius: 6px;">
+            <div style="font-size: 0.75em; color: #1e7e34; font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">✨ Recommended Method</div>
             <button
                 id="refresh"
-                title="Reload conversations and full content (ignores cache)"
+                title="Clicks through each conversation to capture full content (2.5s per conversation)"
             >
-                🔄 Reload Full Content
+                🔄 Full Backup (Auto-Click Mode)
             </button>
-            <button id="downloadButton" title="Automatically loads full content if needed, then downloads">Download Backup</button>
+            <div style="font-size: 0.7em; color: #666; margin-top: 6px; line-height: 1.4;">
+                <strong>Captures complete conversation content</strong> by automatically clicking through each one.<br>
+                Takes ~2.5 seconds per conversation but guarantees full backups.
+            </div>
+        </div>
+        
+        <!-- Secondary Controls -->
+        <div class="controls">
+            <button id="toggleAll">Toggle All</button>
+            <button id="downloadButton" title="Quick mode - only gets full content for currently open conversation">⚡ Quick Download</button>
         </div>
         <!-- Full Backup Mode: HIDDEN for now (partial mode causes confusion)
         <div class="controls">
