@@ -1,3 +1,8 @@
+// Polyfill for Chrome/Brave/Edge: Make 'browser' work like in Firefox
+if (typeof browser === 'undefined') {
+  var browser = chrome;
+}
+
 const statusEl = document.getElementById('status');
 const listEl = document.getElementById('list');
 const refreshBtn = document.getElementById('refresh');
@@ -21,10 +26,10 @@ async function generateKeyAsync() {
 
 // Function to ensure public key exists
 async function ensurePublicKey() {
-    const result = await chrome.storage.local.get(['publicKey']);
+    const result = await browser.storage.local.get(['publicKey']);
     if (!result.publicKey) {
         const keyPair = await generateKeyAsync();
-        await chrome.storage.local.set({
+        await browser.storage.local.set({
             publicKey: keyPair.publicKey,
             privateKey: keyPair.privateKey
         });
@@ -102,7 +107,7 @@ const FILENAME_FORMATS = {
 
 // Get download folder setting
 async function getDownloadFolder() {
-  const result = await chrome.storage.local.get([DOWNLOAD_FOLDER_KEY]);
+  const result = await browser.storage.local.get([DOWNLOAD_FOLDER_KEY]);
   const folder = result[DOWNLOAD_FOLDER_KEY] || DEFAULT_DOWNLOAD_FOLDER;
   console.log('📁 getDownloadFolder() returning:', folder);
   return folder;
@@ -110,19 +115,21 @@ async function getDownloadFolder() {
 
 // Get filename format setting
 async function getFilenameFormat() {
-  const result = await chrome.storage.local.get([FILENAME_FORMAT_KEY]);
-  return result[FILENAME_FORMAT_KEY] || DEFAULT_FILENAME_FORMAT;
+  const result = await browser.storage.local.get([FILENAME_FORMAT_KEY]);
+  const format = result[FILENAME_FORMAT_KEY] || DEFAULT_FILENAME_FORMAT;
+  console.log('📝 getFilenameFormat() returning:', format);
+  return format;
 }
 
 // Get Obsidian mode setting
 async function getObsidianMode() {
-  const result = await chrome.storage.local.get([OBSIDIAN_MODE_KEY]);
+  const result = await browser.storage.local.get([OBSIDIAN_MODE_KEY]);
   return result[OBSIDIAN_MODE_KEY] || false;
 }
 
 // Get Obsidian vault path
 async function getObsidianVaultPath() {
-  const result = await chrome.storage.local.get([OBSIDIAN_VAULT_PATH_KEY]);
+  const result = await browser.storage.local.get([OBSIDIAN_VAULT_PATH_KEY]);
   return result[OBSIDIAN_VAULT_PATH_KEY] || '';
 }
 
@@ -181,7 +188,7 @@ function generateContentHash(title, content) {
 // Cache management functions
 async function getCachedConversations() {
   try {
-    const cached = await chrome.storage.local.get([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    const cached = await browser.storage.local.get([CACHE_KEY, CACHE_KEY + '_timestamp']);
     const timestamp = cached[CACHE_KEY + '_timestamp'];
     const data = cached[CACHE_KEY];
 
@@ -200,7 +207,7 @@ async function getCachedConversations() {
 
 async function setCachedConversations(data) {
   try {
-    await chrome.storage.local.set({
+    await browser.storage.local.set({
       [CACHE_KEY]: data,
       [CACHE_KEY + '_timestamp']: Date.now()
     });
@@ -212,7 +219,7 @@ async function setCachedConversations(data) {
 
 async function getCacheInfo() {
   try {
-    const cached = await chrome.storage.local.get([CACHE_KEY + '_timestamp']);
+    const cached = await browser.storage.local.get([CACHE_KEY + '_timestamp']);
     const timestamp = cached[CACHE_KEY + '_timestamp'];
 
     if (timestamp) {
@@ -697,8 +704,8 @@ async function backupConversationsWithAutoClick(progressCallback) {
 }
 
 async function fetchHeadings() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const results = await chrome.scripting.executeScript({
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const results = await browser.scripting.executeScript({
     target: { tabId: tab.id },
     func: function () {
       function fetchContents() {
@@ -798,6 +805,14 @@ async function renderTitlesOnly() {
     checkbox.checked = item.checked;
     checkbox.addEventListener('change', () => {
       items[index].checked = checkbox.checked;
+      
+      // Update Select All button text when individual checkbox changes
+      const allChecked = items.every(i => i.checked);
+      if (allChecked) {
+        toggleBtn.textContent = '☐ Deselect All';
+      } else {
+        toggleBtn.textContent = '☑️ Select All';
+      }
     });
 
     const titleSpan = document.createElement('span');
@@ -823,6 +838,18 @@ async function renderTitlesOnly() {
 
     li.appendChild(label);
     list.appendChild(li);
+  }
+  
+  // Update Select All button text based on current selection state
+  const allChecked = items.every(i => i.checked);
+  const anyChecked = items.some(i => i.checked);
+  
+  if (allChecked) {
+    toggleBtn.textContent = '☐ Deselect All';
+  } else if (anyChecked) {
+    toggleBtn.textContent = '☑️ Select All'; // Some selected, button will select remaining
+  } else {
+    toggleBtn.textContent = '☑️ Select All';
   }
 }
 
@@ -854,12 +881,44 @@ refreshBtn.addEventListener('click', async () => {
     statusEl.textContent = '🔄 Starting Full Backup - loading conversations...';
     showProgress();
     
+    // IMPORTANT: Ensure full backup mode is enabled FIRST
+    document.getElementById('fullBackupMode').checked = true;
+    console.log('✅ Full Backup Mode checkbox set to:', document.getElementById('fullBackupMode').checked);
+    
+    // Clear cache to force fresh load with full content
+    await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    usingCachedData = false;
+    
+    // Small delay to ensure checkbox state is set
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
     // Step 1: Load all conversations with full content (auto-click mode)
     await loadConversations();
     
     // Check if we got any conversations
     if (!conversationData || conversationData.length === 0) {
-      statusEl.textContent = '⚠️ No conversations found on this page';
+      statusEl.textContent = '⚠️ No conversations found - Are you on duck.ai?';
+      hideProgress();
+      
+      // Diagnostic: Check current tab
+      try {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        console.error('❌ No conversations found. Current tab:', tab?.url);
+        console.error('Expected URL pattern: https://duckduckgo.com/?*duckai=1*');
+      } catch (e) {
+        console.error('❌ Could not query tab:', e);
+      }
+      return;
+    }
+    
+    console.log(`✅ Full Backup loaded ${conversationData.length} conversations:`, conversationData.map(c => ({ title: c.title, length: c.content?.length, source: c.contentSource })));
+    
+    // Verify we got full content (not cached partial data)
+    const fullContentCount = conversationData.filter(c => c.contentSource === 'main_content').length;
+    console.log(`📊 Content sources: ${fullContentCount} full, ${conversationData.length - fullContentCount} partial`);
+    
+    if (fullContentCount === 0) {
+      statusEl.textContent = '⚠️ No full content loaded - try refreshing the page';
       hideProgress();
       return;
     }
@@ -869,6 +928,7 @@ refreshBtn.addEventListener('click', async () => {
     await renderTitlesOnly();
     
     statusEl.textContent = `✓ Loaded ${conversationData.length} conversations - starting download...`;
+    console.log('📦 Preparing to download', items.filter(i => i.checked).length, 'conversations...');
     await new Promise(resolve => setTimeout(resolve, 500));
     
     // Step 3: Download all selected conversations
@@ -881,6 +941,7 @@ refreshBtn.addEventListener('click', async () => {
     }
     
     statusEl.textContent = `🔄 Downloading ${checkedItems.length} conversations...`;
+    console.log('🚀 Starting download loop for', checkedItems.length, 'conversations');
     
     const downloadResults = [];
 
@@ -889,9 +950,11 @@ refreshBtn.addEventListener('click', async () => {
       const conversation = conversationData[item.index];
 
       if (conversation) {
+        console.log(`📥 Downloading ${i+1}/${checkedItems.length}:`, conversation.title);
         updateProgress(i + 1, checkedItems.length, `Downloading: ${conversation.title.substring(0, 30)}...`);
 
         const result = await downloadSingleConversation(conversation, i, checkedItems.length);
+        console.log(`✅ Download complete for "${conversation.title}":`, result);
         downloadResults.push(result);
 
         // Delay between downloads
@@ -903,7 +966,7 @@ refreshBtn.addEventListener('click', async () => {
     
     // Clear cache after backup
     console.log('Clearing cache after backup for accurate status on next load...');
-    await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
     usingCachedData = false;
 
     const duplicateCount = downloadResults.filter(r => r.isDuplicate).length;
@@ -960,7 +1023,7 @@ async function loadTitlesOnly() {
     statusEl.textContent = 'Scanning chat titles...';
     showProgress();
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
 
     const progressSteps = [
       { percent: 20, message: 'Locating conversations...' },
@@ -977,7 +1040,7 @@ async function loadTitlesOnly() {
       }
     }, 300);
 
-    const results = await chrome.scripting.executeScript({
+    const results = await browser.scripting.executeScript({
       target: { tabId: tab.id },
       func: backupConversations, // Fast version - no clicking
     });
@@ -1034,6 +1097,8 @@ async function loadTitlesOnly() {
 async function loadConversations() {
   const fullBackupMode = document.getElementById('fullBackupMode').checked;
   
+  console.log('🔍 loadConversations() called. Full Backup Mode:', fullBackupMode);
+  
   statusEl.textContent = fullBackupMode ? 'Loading full content (auto-clicking through conversations)...' : 'Loading chat titles...';
   hideProgress();
 
@@ -1042,12 +1107,15 @@ async function loadConversations() {
 
     // Don't use cache in full backup mode
     if (cachedData && !fullBackupMode) {
+      console.log('📦 Using cached data (', cachedData.length, 'conversations)');
       conversationData = cachedData;
       usingCachedData = true;  // NEW: Flag that we're using cache
       const cacheInfo = await getCacheInfo();
       statusEl.textContent = `Loaded cached chat titles (expires in ${cacheInfo.remainingMinutes}min)...`;
     } else {
       usingCachedData = false;  // NEW: Fresh scan, not using cache
+      console.log('🔄 Fresh scan mode. Full Backup:', fullBackupMode);
+      
       if (fullBackupMode) {
         statusEl.textContent = '🔄 Scanning conversations (Full Backup will start after clicking on button "Download Backup")...';
       } else {
@@ -1055,30 +1123,38 @@ async function loadConversations() {
       }
       showProgress();
 
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      
+      console.log('📍 Current tab:', { id: tab.id, url: tab.url, title: tab.title });
 
       // Choose appropriate function based on mode
       const backupFunction = fullBackupMode ? backupConversationsWithAutoClick : backupConversations;
+      console.log('🎯 Using function:', fullBackupMode ? 'backupConversationsWithAutoClick (FULL BACKUP)' : 'backupConversations (TITLES ONLY)');
       
       if (fullBackupMode) {
         // Full backup mode - show real-time progress
         updateProgress(0, 100, 'Loading conversations...');
         
         try {
-          const backupResults = await chrome.scripting.executeScript({
+          console.log('🔧 Executing script in Full Backup mode...');
+          const backupResults = await browser.scripting.executeScript({
             target: { tabId: tab.id },
-            func: backupFunction,
-            args: [(current, total, message) => {
-              // Progress callback - this runs in page context, can't update UI directly
-              console.log(`Progress: ${current}/${total} - ${message}`);
-            }]
+            func: backupFunction
+            // Note: No args needed - the function handles everything internally
           });
 
           updateProgress(100, 100, 'Complete!');
+          
+          console.log('📦 Script execution result:', backupResults);
 
           // Check if script executed successfully
           if (!backupResults || !backupResults[0] || !backupResults[0].result) {
             hideProgress();
+            console.error('❌ Script returned no results:', { 
+              hasResults: !!backupResults, 
+              hasFirstItem: !!backupResults?.[0],
+              result: backupResults?.[0]?.result 
+            });
             statusEl.textContent = '⚠️ Not a DuckDuckGo AI page - Please navigate to duck.ai';
             conversationData = [];
             items = [];
@@ -1098,8 +1174,20 @@ async function loadConversations() {
           hideProgress();
         } catch (scriptError) {
           hideProgress();
-          console.error('Script execution error:', scriptError);
-          statusEl.textContent = `⚠️ Error: ${scriptError.message || 'Are you on duck.ai?'}`;
+          console.error('❌ Script execution error:', scriptError);
+          console.error('Error name:', scriptError.name);
+          console.error('Error message:', scriptError.message);
+          console.error('Error stack:', scriptError.stack);
+          
+          // Provide helpful error messages
+          let errorMsg = 'Script execution failed';
+          if (scriptError.message?.includes('Cannot access') || scriptError.message?.includes('scripting')) {
+            errorMsg = 'Permission denied - Click extension while on duck.ai page';
+          } else if (scriptError.message?.includes('Receiving end does not exist')) {
+            errorMsg = 'Page not ready - Try refreshing duck.ai';
+          }
+          
+          statusEl.textContent = `⚠️ ${errorMsg}`;
           conversationData = [];
           items = [];
           await renderTitlesOnly();
@@ -1127,7 +1215,7 @@ async function loadConversations() {
         }, 400);
 
         try {
-          const backupResults = await chrome.scripting.executeScript({
+          const backupResults = await browser.scripting.executeScript({
             target: { tabId: tab.id },
             func: backupFunction
           });
@@ -1210,7 +1298,7 @@ async function loadConversations() {
 
 async function forceRefresh() {
   console.log('Force refresh triggered');
-  await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+  await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
   statusEl.textContent = 'Cache cleared, refreshing...';
   refreshBtn.click();
 }
@@ -1220,7 +1308,7 @@ refreshBtn.addEventListener('dblclick', forceRefresh);
 // NEW: Clear cache AND memory when Full Backup Mode checkbox is toggled
 document.getElementById('fullBackupMode').addEventListener('change', async function() {
   console.log('Full Backup Mode toggled, clearing cache and memory...');
-  await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+  await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
   usingCachedData = false;
   
   // CRITICAL: Also clear in-memory data to prevent mismatched downloads
@@ -1233,7 +1321,7 @@ document.getElementById('fullBackupMode').addEventListener('change', async funct
 
 document.getElementById('clearCache').addEventListener('click', async () => {
   try {
-    await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
     usingCachedData = false;  // NEW: Clear flag
     statusEl.textContent = 'Cache cleared successfully';
     items = [];
@@ -1245,10 +1333,27 @@ document.getElementById('clearCache').addEventListener('click', async () => {
   }
 });
 
+// Select All / Deselect All button with smart toggle
 toggleBtn.addEventListener('click', async () => {
+  if (items.length === 0) {
+    statusEl.textContent = '⚠️ No conversations loaded yet. Click "Load Chat-titles" first.';
+    return;
+  }
+  
   const allChecked = items.every(i => i.checked);
-  items = items.map(i => ({ ...i, checked: !allChecked }));
+  const newState = !allChecked;
+  
+  items = items.map(i => ({ ...i, checked: newState }));
   await renderTitlesOnly();
+  
+  // Update button text based on new state
+  if (newState) {
+    toggleBtn.textContent = '☐ Deselect All';
+    statusEl.textContent = `✓ Selected all ${items.length} conversations`;
+  } else {
+    toggleBtn.textContent = '☑️ Select All';
+    statusEl.textContent = `Deselected all conversations`;
+  }
 });
 
 function htmlToMarkdown(html) {
@@ -1405,7 +1510,7 @@ function htmlToMarkdown(html) {
 
 async function checkLocalDownloadedFiles() {
   try {
-    const downloadedFiles = await chrome.storage.local.get(['downloadedFiles']) || { downloadedFiles: [] };
+    const downloadedFiles = await browser.storage.local.get(['downloadedFiles']) || { downloadedFiles: [] };
     return downloadedFiles.downloadedFiles || [];
   } catch (error) {
     console.error('Error checking downloaded files:', error);
@@ -1426,7 +1531,7 @@ async function trackDownloadedFile(filename, conversation) {
     };
 
     existingFiles.push(newFile);
-    await chrome.storage.local.set({ downloadedFiles: existingFiles });
+    await browser.storage.local.set({ downloadedFiles: existingFiles });
     console.log(`📝 Tracked: ${filename} (${newFile.contentSource})`);
   } catch (error) {
     console.error('Error tracking downloaded file:', error);
@@ -1515,10 +1620,12 @@ function getBackupStatusSync(conversation, downloadedFiles) {
     // 1. When using cached data (cache hashes might be unreliable)
     // 2. When content source is not main_content (sidebar_text hashes are unstable)
     // 3. When current content is very short (might be partial/incomplete extraction)
+    // 4. When we don't have backup files loaded yet (prevents timing issues on first load)
     const shouldCheckOutdated = !usingCachedData && 
                                  currentSource === 'main_content' && 
                                  conversation.content && 
-                                 conversation.content.length > 200; // Require substantial content
+                                 conversation.content.length > 200 && // Require substantial content
+                                 downloadedFiles && downloadedFiles.length > 0; // Require backup history loaded
     
     const outdatedMatch = shouldCheckOutdated && downloadedFiles.find(f => {
       if (f.title !== title || f.contentSource !== currentSource) return false;
@@ -1614,7 +1721,7 @@ function getBackupStatusSync(conversation, downloadedFiles) {
 
 async function addToBackupHistory(items) {
   try {
-    const { [BACKUP_HISTORY_KEY]: history = [] } = await chrome.storage.local.get([BACKUP_HISTORY_KEY]);
+    const { [BACKUP_HISTORY_KEY]: history = [] } = await browser.storage.local.get([BACKUP_HISTORY_KEY]);
 
     const newEntry = {
       timestamp: new Date().toISOString(),
@@ -1631,7 +1738,7 @@ async function addToBackupHistory(items) {
     const maxHistory = 50;
     const trimmedHistory = history.slice(0, maxHistory);
 
-    await chrome.storage.local.set({ [BACKUP_HISTORY_KEY]: trimmedHistory });
+    await browser.storage.local.set({ [BACKUP_HISTORY_KEY]: trimmedHistory });
     console.log('Added backup entry to history');
   } catch (error) {
     console.error('Error adding to backup history:', error);
@@ -1722,16 +1829,36 @@ async function downloadSingleConversation(conversation, index, total) {
 
   // Download using standard API (works for relative paths only)
   try {
-    await browser.downloads.download({
-      url: url,
-      filename: fullPath,
-      saveAs: false  // Auto-download without prompting
-    });
+    console.log('🚀 Starting download:', { filename, fullPath, folder });
+    
+    // Try downloading with folder path
+    let downloadId;
+    try {
+      downloadId = await browser.downloads.download({
+        url: url,
+        filename: fullPath,
+        saveAs: false,
+        conflictAction: 'uniquify'  // Auto-rename duplicates
+      });
+      console.log('✅ Download started successfully! ID:', downloadId);
+    } catch (folderError) {
+      // If folder path fails, try without folder (Chrome sometimes fails with folders)
+      console.warn('⚠️ Folder path failed, trying filename only:', folderError.message);
+      downloadId = await browser.downloads.download({
+        url: url,
+        filename: filename,  // Just filename, no folder
+        saveAs: false,
+        conflictAction: 'uniquify'
+      });
+      console.log('✅ Download started (without folder) ID:', downloadId);
+    }
+    
     URL.revokeObjectURL(url);
   } catch (error) {
-    console.error('Download failed for', filename, error);
-    console.error('Attempted path:', fullPath);
+    console.error('❌ Download API completely failed:', error);
+    console.error('Error details:', error.message, error.stack);
     // Fallback to traditional method if downloads API fails
+    console.log('⚠️ Falling back to traditional <a> tag download method...');
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -1739,6 +1866,7 @@ async function downloadSingleConversation(conversation, index, total) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    console.log('✅ Fallback download triggered');
   }
 
   // Track the download
@@ -1775,11 +1903,7 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
         return;
       }
       
-      // Auto-select all conversations
-      items = items.map(i => ({ ...i, checked: true }));
-      await renderTitlesOnly();
-      
-      statusEl.textContent = `✓ Loaded ${conversationData.length} conversations`;
+      statusEl.textContent = `✓ Loaded ${conversationData.length} conversations - Select conversations to download`;
       await new Promise(resolve => setTimeout(resolve, 300));
     } catch (error) {
       console.error('Error loading conversations:', error);
@@ -1789,12 +1913,15 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
     }
   }
   
+  // Check if any items are selected
   const checkedItems = items.filter(item => item.checked);
   if (checkedItems.length === 0) {
-    statusEl.textContent = 'No items selected for download';
+    statusEl.textContent = '⚠️ No conversations selected! Click "☑️ Select All" or check individual conversations first.';
     hideProgress();
     return;
   }
+  
+  const finalCheckedItems = checkedItems; // Use the already-filtered list
 
   const fullBackupMode = document.getElementById('fullBackupMode').checked;
   
@@ -1849,23 +1976,23 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
   }
   
   if (fullBackupMode) {
-    statusEl.textContent = `🔄 Starting Full Backup for ${checkedItems.length} conversations...`;
+    statusEl.textContent = `🔄 Starting Full Backup for ${finalCheckedItems.length} conversations...`;
   } else {
-    statusEl.textContent = `Downloading ${checkedItems.length} conversations...`;
+    statusEl.textContent = `Downloading ${finalCheckedItems.length} conversations...`;
   }
   showProgress();
 
   try {
     const downloadResults = [];
 
-    for (let i = 0; i < checkedItems.length; i++) {
-      const item = checkedItems[i];
+    for (let i = 0; i < finalCheckedItems.length; i++) {
+      const item = finalCheckedItems[i];
       const conversation = conversationData[item.index];
 
       if (conversation) {
-        updateProgress(i + 1, checkedItems.length, `Downloading: ${conversation.title.substring(0, 30)}...`);
+        updateProgress(i + 1, finalCheckedItems.length, `Downloading: ${conversation.title.substring(0, 30)}...`);
 
-        const result = await downloadSingleConversation(conversation, i, checkedItems.length);
+        const result = await downloadSingleConversation(conversation, i, finalCheckedItems.length);
         downloadResults.push(result);
 
         // Longer delay between downloads to prevent content bleeding
@@ -1873,11 +2000,11 @@ document.getElementById('downloadButton').addEventListener('click', async () => 
       }
     }
 
-    await addToBackupHistory(checkedItems.map(item => conversationData[item.index]));
+    await addToBackupHistory(finalCheckedItems.map(item => conversationData[item.index]));
     
     // Clear cache after backup so next load shows accurate outdated status
     console.log('Clearing cache after backup for accurate status on next load...');
-    await chrome.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
+    await browser.storage.local.remove([CACHE_KEY, CACHE_KEY + '_timestamp']);
     usingCachedData = false;
 
     const duplicateCount = downloadResults.filter(r => r.isDuplicate).length;
@@ -2157,7 +2284,7 @@ document.getElementById('viewHistory').addEventListener('click', async () => {
   const searchInput = document.getElementById('historySearch');
 
   try {
-    const { [BACKUP_HISTORY_KEY]: history = [] } = await chrome.storage.local.get([BACKUP_HISTORY_KEY]);
+    const { [BACKUP_HISTORY_KEY]: history = [] } = await browser.storage.local.get([BACKUP_HISTORY_KEY]);
     fullHistory = history.reverse();
     
     // Clear search input
@@ -2223,7 +2350,7 @@ document.getElementById('clearHistory').addEventListener('click', async () => {
   document.getElementById('confirmClear').addEventListener('click', async () => {
     document.body.removeChild(modal);
     try {
-      await chrome.storage.local.remove([BACKUP_HISTORY_KEY]);
+      await browser.storage.local.remove([BACKUP_HISTORY_KEY]);
       statusEl.textContent = 'Backup history cleared successfully';
 
       const historyModal = document.getElementById('historyModal');
@@ -2250,9 +2377,9 @@ if (document.getElementById('testStructure')) {
   document.getElementById('testStructure').addEventListener('click', async () => {
     statusEl.textContent = 'Running debug analysis...';
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
 
-    const debugResults = await chrome.scripting.executeScript({
+    const debugResults = await browser.scripting.executeScript({
       target: { tabId: tab.id },
       func: function() {
         console.log("=== DEBUG TEST ===");
@@ -2316,7 +2443,7 @@ downloadFolderInput.addEventListener('input', () => {
 // Handle filename format change
 filenameFormatSelect.addEventListener('change', async () => {
   const formatKey = filenameFormatSelect.value;
-  await chrome.storage.local.set({ [FILENAME_FORMAT_KEY]: formatKey });
+  await browser.storage.local.set({ [FILENAME_FORMAT_KEY]: formatKey });
   updateFormatExample(formatKey);
   
   statusEl.textContent = `✓ Filename format updated: ${FILENAME_FORMATS[formatKey].name}`;
@@ -2334,7 +2461,7 @@ saveFolderBtn.addEventListener('click', async () => {
   // Sanitize folder name (remove invalid characters)
   const sanitized = folder.replace(/[<>:"|?*]/g, '_');
   
-  await chrome.storage.local.set({ [DOWNLOAD_FOLDER_KEY]: sanitized });
+  await browser.storage.local.set({ [DOWNLOAD_FOLDER_KEY]: sanitized });
   downloadFolderInput.value = sanitized;
   folderPreview.textContent = sanitized;
   
@@ -2342,7 +2469,7 @@ saveFolderBtn.addEventListener('click', async () => {
   console.log('Full storage key:', DOWNLOAD_FOLDER_KEY);
   
   // Verify it was saved
-  const verify = await chrome.storage.local.get([DOWNLOAD_FOLDER_KEY]);
+  const verify = await browser.storage.local.get([DOWNLOAD_FOLDER_KEY]);
   console.log('Verification - Stored value:', verify[DOWNLOAD_FOLDER_KEY]);
   
   statusEl.textContent = `✓ Download folder set to: ${sanitized}`;
@@ -2360,7 +2487,7 @@ saveFolderBtn.addEventListener('click', async () => {
 const debugSettingsBtn = document.getElementById('debugSettingsBtn');
 if (debugSettingsBtn) {
   debugSettingsBtn.addEventListener('click', async () => {
-    const allSettings = await chrome.storage.local.get(null);
+    const allSettings = await browser.storage.local.get(null);
     console.log('=== ALL STORED SETTINGS ===');
     console.log('Download Folder:', allSettings[DOWNLOAD_FOLDER_KEY] || 'NOT SET');
     console.log('Filename Format:', allSettings[FILENAME_FORMAT_KEY] || 'NOT SET');
