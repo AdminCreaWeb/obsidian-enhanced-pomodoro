@@ -1,4 +1,3 @@
-// Test edit - Nov 13
 const kanbanStyles = `
 .kanban-settings-container {
   margin-top: 1em;
@@ -672,7 +671,7 @@ export default class EnhancedPomodoro extends Plugin {
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
-        oscillator.frequency.value = 528; // A4 note
+        oscillator.frequency.value = 440; // A4 note
         oscillator.type = 'sine';
         
         gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
@@ -690,7 +689,7 @@ export default class EnhancedPomodoro extends Plugin {
           oscillator.connect(gainNode);
           gainNode.connect(audioContext.destination);
           
-          oscillator.frequency.value = 693; // Higher pitch
+          oscillator.frequency.value = 600; // Higher pitch
           oscillator.type = 'sine';
           
           const startTime = audioContext.currentTime + (i * 0.3);
@@ -700,25 +699,23 @@ export default class EnhancedPomodoro extends Plugin {
           oscillator.start(startTime);
           oscillator.stop(startTime + 0.15);
         }
-      } else if (sound == 'quickbreak') {
-         // Three short beeps for short break
-        for (let i = 0; i < 3; i++) {
-          const oscillator = audioContext.createOscillator();
-          const gainNode = audioContext.createGain();
-          
-          oscillator.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-          
-          oscillator.frequency.value = 432; // Higher pitch
-          oscillator.type = 'sine';
-          
-          const startTime = audioContext.currentTime + (i * 0.3);
-          gainNode.gain.setValueAtTime(0.2, startTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.15);
-          
-          oscillator.start(startTime);
-          oscillator.stop(startTime + 0.15);
-        }
+        
+      } else if (sound === 'default' || sound === 'bell') {
+        // Default beep sound
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.frequency.value = 440; // A4 note
+        oscillator.type = 'sine';
+        
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.8);
         
       } else if (sound === 'ding') {
         // Create a ding sound  
@@ -728,7 +725,7 @@ export default class EnhancedPomodoro extends Plugin {
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
-        oscillator.frequency.value = 693;
+        oscillator.frequency.value = 600;
         oscillator.type = 'triangle';
         
         gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
@@ -736,23 +733,6 @@ export default class EnhancedPomodoro extends Plugin {
         
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.3);
-      }
-      else if(sound === 'default') {
-        // Default beep sound
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        oscillator.frequency.value = 693; // A4 note
-        oscillator.type = 'sine';
-        
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.8);
       }
     } catch (e) {
       console.error('Error playing sound:', e);
@@ -919,7 +899,7 @@ export default class EnhancedPomodoro extends Plugin {
     await this.logSession('break_complete');
     
     // Play work start sound (default bell)
-    this.playSound(this.quickBreakSavedState ? 'quickbreak' : 'ding');
+    this.playSound('bell');
     
     // Update status bar to show new mode
     this.updateStatusBar();
@@ -1785,17 +1765,17 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Quick Break Sound')
-      .setDesc('Three quick beeps at 432Hz')
+      .setDesc('Three quick beeps at 600Hz')
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
-          this.plugin.playSound('quickbreak');
+          this.plugin.playSound('auickbreak');
         })
       );
       
     new Setting(containerEl)
       .setName('Short Break Sound')
-      .setDesc('Three quick beeps at 693Hz')
+      .setDesc('Three quick beeps at 600Hz')
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
@@ -1805,7 +1785,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
       
     new Setting(containerEl)
       .setName('Long Break Sound')
-      .setDesc('One sustained beep at 528Hz')
+      .setDesc('One sustained beep at 440Hz')
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
@@ -1819,7 +1799,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
-          this.plugin.playSound('ding');
+          this.plugin.playSound('bell');
         })
       );
   }
