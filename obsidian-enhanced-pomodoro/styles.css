@@ -1,0 +1,315 @@
+/* Pomodoro Timer Container */
+.pomodoro-timer-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* SVG Text Elements (inside circle) */
+.timer-svg .mode-text {
+  font-size: 14px;
+  font-weight: 500;
+  fill: var(--text-muted);
+  font-family: var(--font-interface);
+}
+
+.timer-svg .timer-text {
+  font-size: 28px;
+  font-weight: 700;
+  fill: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 2px;
+}
+
+/* SVG Timer Circle */
+.timer-svg {
+  display: block;
+  margin: 20px auto;
+}
+
+.circle-bg {
+  stroke: var(--background-modifier-border);
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+.circle-progress {
+  stroke: var(--interactive-accent);
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+/* Debug Mode Dots */
+.debug-dot {
+  transition: all 0.2s ease;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  pointer-events: none; /* Let the hit area handle interactions */
+}
+
+.debug-hit-area {
+  opacity: 0.5; /* Make slightly visible in debug mode */
+  transition: all 0.2s ease;
+}
+
+.debug-hit-start {
+  fill: rgba(255, 107, 107, 0.2); /* Semi-transparent red */
+}
+
+.debug-hit-end {
+  fill: rgba(78, 205, 196, 0.2); /* Semi-transparent teal */
+}
+
+/* Show hit areas on hover in debug mode */
+.debug-hit-area:hover {
+  opacity: 0.7;
+}
+
+/* Hide hit areas when not in debug mode */
+:not(.debug-mode) .debug-hit-area {
+  display: none;
+}
+
+.debug-dot:hover {
+  transform: scale(1.2);
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4));
+}
+
+.debug-dot:active {
+  transform: scale(1.1);
+}
+
+/* Button Group */
+.btn-group {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  justify-content: center;
+}
+
+.control-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.control-icon:hover {
+  background: var(--background-modifier-border-hover);
+  transform: scale(1.05);
+}
+
+.control-icon:active {
+  transform: scale(0.95);
+}
+
+.control-icon svg {
+  color: var(--text-normal);
+  pointer-events: none; /* Let clicks pass through to parent button */
+}
+
+/* Status Bar */
+.status-bar-item.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.status-bar-item.clickable:hover {
+  color: var(--text-accent);
+}
+
+/* Settings */
+.setting-item-description {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.kanban-selector-container {
+  margin: 10px 0;
+}
+
+.kanban-board-selector {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.kanban-board-selector:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--background-modifier-border);
+}
+
+.kanban-board-selector option {
+  padding: 4px 8px;
+}
+
+/* Task Groups and Lists */
+.pomodoro-tasks {
+  padding: 10px;
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Task Group Container - wraps header and tasks */
+.pomodoro-task-group {
+  flex: 0 0 300px;
+  min-width: 280px;
+  max-width: 350px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 400px);
+}
+
+.pomodoro-column-header {
+  margin: 0;
+  margin-bottom: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(90deg, var(--interactive-accent), var(--interactive-accent-hover));
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.pomodoro-column-header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.pomodoro-column-header:first-of-type {
+  margin-top: 0;
+}
+
+.pomodoro-column-header .column-title {
+  font-weight: 800;
+  font-size: 15px;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  display: block;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 1;
+}
+
+/* Different colors for different columns */
+.pomodoro-task-group:nth-child(1) .pomodoro-column-header {
+  background: linear-gradient(90deg, #4CAF50, #45a049);
+}
+
+.pomodoro-task-group:nth-child(2) .pomodoro-column-header {
+  background: linear-gradient(90deg, #2196F3, #1976D2);
+}
+
+.pomodoro-task-group:nth-child(3) .pomodoro-column-header {
+  background: linear-gradient(90deg, #FF9800, #F57C00);
+}
+
+.pomodoro-task-group:nth-child(4) .pomodoro-column-header {
+  background: linear-gradient(90deg, #9C27B0, #7B1FA2);
+}
+
+.pomodoro-task-list {
+  list-style: none;
+  padding: 0 8px;
+  margin: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.pomodoro-task-item {
+  padding: 10px 14px;
+  margin: 6px 0;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.pomodoro-task-item:hover {
+  background: var(--background-primary-alt);
+  border-color: var(--interactive-accent);
+  transform: translateX(4px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.pomodoro-task-item.pomodoro-task-active {
+  background: var(--interactive-accent);
+  background: linear-gradient(90deg, rgba(var(--interactive-accent-rgb), 0.15) 0%, transparent 100%);
+  border-color: var(--interactive-accent);
+  font-weight: 500;
+}
+
+.pomodoro-task-item.task-completed {
+  opacity: 0.6;
+}
+
+.pomodoro-task-item .task-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pomodoro-task-item .task-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.pomodoro-task-item .task-timer {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.pomodoro-task-item.pomodoro-task-active .task-timer {
+  color: var(--interactive-accent);
+}
+
+.pomodoro-task-item .task-checkbox {
+  margin: 0;
+  cursor: pointer;
+}
+
+.pomodoro-session-log {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 0;
+  margin-left: 24px;
+}
+
+.pomodoro-task-log {
+  margin-top: 4px;
+}

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "inlineSources": false,
+    "inlineSourceMap": true,
+    "module": "ESNext",
+    "target": "ES2020",
+    "allowJs": true,
+    "noImplicitAny": false,
+    "moduleResolution": "node",
+    "importHelpers": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "outDir": ".",
+    "lib": ["DOM", "ES2020"],
+    "skipLibCheck": true,
+    "rootDir": "./src",
+    "typeRoots": ["./node_modules/@types"],
+    "strict": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
