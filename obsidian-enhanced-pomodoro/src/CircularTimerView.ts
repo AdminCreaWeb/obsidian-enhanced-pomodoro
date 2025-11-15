@@ -1,4 +1,4 @@
-import { ItemView, TFile, WorkspaceLeaf } from 'obsidian';
+import { ItemView, TFile, WorkspaceLeaf, Notice } from 'obsidian';
 
 export const CIRCULAR_TIMER_VIEW = 'circular-timer-view';
 
@@ -876,6 +876,122 @@ export class CircularTimerView extends ItemView {
     }, 5000);
   }
 
+  // Column Detection Helper Functions
+  private isProgressColumn(columnTitle: string): boolean {
+    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, '').trim();
+    return normalized.includes('in progress') ||
+           normalized.includes('phase progress') ||
+           normalized.includes('current tasks') ||
+           normalized.includes('phase completion') ||
+           normalized === 'doing' ||
+           normalized === 'progress';
+  }
+
+  private isDoneColumn(columnTitle: string): boolean {
+    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, '').trim();
+    return normalized.includes('✅ done') ||
+           normalized.includes('done') ||
+           normalized.includes('phase - done') ||
+           normalized.includes('completed') ||
+           normalized.includes('code improvements completed') ||
+           normalized === 'finished';
+  }
+
+  private findColumnsByType(type: 'progress' | 'done'): { element: HTMLElement, title: string }[] {
+    const columns: { element: HTMLElement, title: string }[] = [];
+    const groups = this.tasksContainer?.querySelectorAll('.pomodoro-task-group') || [];
+    
+    groups.forEach(group => {
+      const titleElement = group.querySelector('.pomodoro-column-header .column-title');
+      if (titleElement) {
+        const title = titleElement.textContent || '';
+        const isMatch = type === 'progress' ? this.isProgressColumn(title) : this.isDoneColumn(title);
+        if (isMatch) {
+          columns.push({ element: group as HTMLElement, title });
+        }
+      }
+    });
+    
+    return columns;
+  }
+
+  private async moveTaskToColumn(taskId: string, targetColumnName: string): Promise<boolean> {
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return false;
+
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) return false;
+
+      const content = await this.app.vault.read(file);
+      
+      // Parse the Kanban markdown content
+      // This is a simplified implementation - you may need to adjust based on your exact Kanban format
+      const lines = content.split('\n');
+      let taskLine: string | null = null;
+      let taskLineIndex = -1;
+      let currentColumn = '';
+      let targetColumnIndex = -1;
+      
+      // Find the task and its current position
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Check if this is a column header
+        if (line.startsWith('## ')) {
+          currentColumn = line.substring(3).trim();
+          if (this.isProgressColumn(currentColumn) || this.isDoneColumn(currentColumn)) {
+            if ((targetColumnName === 'progress' && this.isProgressColumn(currentColumn)) ||
+                (targetColumnName === 'done' && this.isDoneColumn(currentColumn))) {
+              targetColumnIndex = i;
+            }
+          }
+        }
+        
+        // Check if this line contains our task
+        if (line.includes(taskId) || (taskId && line.includes(taskId.split('-').slice(-1)[0]))) {
+          taskLine = line;
+          taskLineIndex = i;
+        }
+      }
+      
+      // Move the task if found
+      if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
+        // Remove from current position
+        lines.splice(taskLineIndex, 1);
+        
+        // Insert after target column header
+        lines.splice(targetColumnIndex + 1, 0, taskLine);
+        
+        // Write back to file
+        await this.app.vault.modify(file, lines.join('\n'));
+        
+        // Reload tasks to update UI
+        await this.loadKanbanTasks(boardPath);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error moving task:', error);
+      return false;
+    }
+  }
+
+  private scrollToColumn(columnElement: HTMLElement) {
+    if (!this.tasksContainer) return;
+    
+    // Smooth scroll to bring the column into view
+    const containerRect = this.tasksContainer.getBoundingClientRect();
+    const columnRect = columnElement.getBoundingClientRect();
+    const scrollLeft = columnElement.offsetLeft - 20; // 20px padding
+    
+    this.tasksContainer.scrollTo({
+      left: scrollLeft,
+      behavior: 'smooth'
+    });
+  }
+
   private async addKanbanBoardSelector(container: HTMLElement): Promise<void> {
     let selectorContainer: HTMLElement | null = null;
     
@@ -1378,6 +1494,35 @@ export class CircularTimerView extends ItemView {
         // Create task list for this column inside the group
         const taskList = taskGroup.createEl('ul', { cls: 'pomodoro-task-list' });
         
+        // Add drop zone handlers for drag & drop
+        taskList.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer!.dropEffect = 'move';
+          taskList.classList.add('drag-over');
+        });
+        
+        taskList.addEventListener('dragleave', () => {
+          taskList.classList.remove('drag-over');
+        });
+        
+        taskList.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          taskList.classList.remove('drag-over');
+          
+          const draggedTaskId = e.dataTransfer?.getData('text/plain');
+          if (!draggedTaskId) return;
+          
+          // Find the target column name
+          const targetColumnName = columnName;
+          
+          // Simple implementation: just move the task to this column
+          // In a real implementation, you'd update the Kanban file
+          new Notice(`Moving task to "${targetColumnName}" - manual drag & drop (coming soon)`);
+          
+          // For now, just show it's possible but not fully implemented
+          // Full implementation would require updating the Kanban markdown file
+        });
+        
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
           const taskItem = taskList.createEl('li', { 
@@ -1398,7 +1543,30 @@ export class CircularTimerView extends ItemView {
           checkbox.addEventListener('change', async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass('task-completed', checkbox.checked);
-            // Save state if needed
+            
+            // Auto-move to done column if enabled and checkbox is checked
+            if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
+              const currentGroupEl = taskItem.closest('.pomodoro-task-group');
+              const currentColumnTitle = currentGroupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
+              
+              if (!this.isDoneColumn(currentColumnTitle)) {
+                const doneColumns = this.findColumnsByType('done');
+                
+                if (doneColumns.length === 0) {
+                  new Notice('No "Done" column found on this board. Consider disabling auto-move in settings.');
+                } else if (doneColumns.length > 1) {
+                  const columnNames = doneColumns.map(c => c.title).join(', ');
+                  new Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
+                } else {
+                  // Move to the single done column
+                  const success = await this.moveTaskToColumn(taskId, 'done');
+                  if (success) {
+                    new Notice(`Task moved to "${doneColumns[0].title}"`);
+                    // The UI will be refreshed automatically by moveTaskToColumn
+                  }
+                }
+              }
+            }
           });
           
           taskContent.createSpan({ text: task.text, cls: 'task-text' });
@@ -1420,6 +1588,18 @@ export class CircularTimerView extends ItemView {
           // Add click handler to mark task as current
           taskItem.addEventListener('click', () => {
             this.selectTask(taskId, taskItem, taskTimer);
+          });
+          
+          // Add drag & drop support
+          taskItem.draggable = true;
+          taskItem.addEventListener('dragstart', (e) => {
+            e.dataTransfer?.setData('text/plain', taskId);
+            e.dataTransfer!.effectAllowed = 'move';
+            taskItem.classList.add('dragging');
+          });
+          
+          taskItem.addEventListener('dragend', () => {
+            taskItem.classList.remove('dragging');
           });
           
           // Restore last active task
@@ -1458,6 +1638,15 @@ export class CircularTimerView extends ItemView {
   }
 
   private async selectTask(taskId: string, taskElement: HTMLElement, timerElement: HTMLElement) {
+    // Always hide any existing warning as soon as a task is clicked
+    if (this.warningElement) {
+      this.warningElement.style.display = 'none';
+    }
+    if (this.warningTimeout !== null) {
+      window.clearTimeout(this.warningTimeout);
+      this.warningTimeout = null;
+    }
+
     const taskText = taskElement.querySelector('.task-text')?.textContent || 'Unknown Task';
     const kanbanFile = this.plugin.settings.kanbanBoardPath || 'No Kanban Selected';
     const kanbanFileName = kanbanFile.split('/').pop()?.replace('.md', '') || 'Unknown';
@@ -1471,6 +1660,45 @@ export class CircularTimerView extends ItemView {
       this.showCompletedTaskWarning(taskText);
       console.log('[TASK SELECTION] Cannot select completed task:', taskText);
       return;
+    }
+    
+    // Check if we need to restrict to progress tasks only
+    if (this.plugin.settings.restrictToProgressTasks) {
+      const groupEl = taskElement.closest('.pomodoro-task-group');
+      const columnTitle = groupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
+      
+      if (!this.isProgressColumn(columnTitle)) {
+        this.showCompletedTaskWarning(`Task must be in progress column to start timer. Current: "${columnTitle}"`);
+        console.log('[TASK SELECTION] Task not in progress column:', columnTitle);
+        return;
+      }
+    }
+    
+    // Auto-move to progress if enabled
+    if (this.plugin.settings.autoMoveToProgress) {
+      const currentGroupEl = taskElement.closest('.pomodoro-task-group');
+      const currentColumnTitle = currentGroupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
+      
+      if (!this.isProgressColumn(currentColumnTitle)) {
+        const progressColumns = this.findColumnsByType('progress');
+        
+        if (progressColumns.length === 0) {
+          new Notice('No "In Progress" column found on this board. Consider disabling auto-move in settings.');
+        } else if (progressColumns.length > 1) {
+          const columnNames = progressColumns.map(c => c.title).join(', ');
+          new Notice(`Multiple progress columns found: ${columnNames}. Consider disabling auto-move in settings.`);
+        } else {
+          // Move to the single progress column
+          const success = await this.moveTaskToColumn(taskId, 'progress');
+          if (success) {
+            // Scroll to the progress column
+            this.scrollToColumn(progressColumns[0].element);
+            new Notice(`Task moved to "${progressColumns[0].title}"`);
+            // Return early as the task will be reloaded
+            return;
+          }
+        }
+      }
     }
     
     console.log('═══════════════════════════════════════════════════════');

@@ -923,8 +923,15 @@ refreshBtn.addEventListener('click', async () => {
       return;
     }
     
-    // Step 2: Auto-select all conversations
-    items = items.map(i => ({ ...i, checked: true }));
+    // Step 2: Rebuild items array with new conversation data AND auto-select all
+    // This is CRITICAL - we must rebuild items to match the new conversationData indices
+    items = conversationData.map((r, index) => ({
+      title: r.title,
+      checked: true, // Auto-select all for Full Backup
+      index: index
+    }));
+    console.log(`📋 Rebuilt items array with ${items.length} items, all selected`);
+    
     await renderTitlesOnly();
     
     statusEl.textContent = `✓ Loaded ${conversationData.length} conversations - starting download...`;
@@ -1599,9 +1606,11 @@ function getBackupStatusSync(conversation, downloadedFiles) {
     const title = conversation.title;
     
     // Check for exact hash match (content unchanged)
-    const exactMatch = downloadedFiles.find(f => 
-      f.conversationHash === currentHash
-    );
+    // IMPORTANT: Find the MOST RECENT match, not just any match
+    const hashMatches = downloadedFiles.filter(f => f.conversationHash === currentHash);
+    const exactMatch = hashMatches.length > 0 
+      ? hashMatches.reduce((latest, current) => current.timestamp > latest.timestamp ? current : latest)
+      : null;
     
     if (exactMatch) {
       const isFullBackup = exactMatch.contentSource === 'main_content';
@@ -1627,7 +1636,8 @@ function getBackupStatusSync(conversation, downloadedFiles) {
                                  conversation.content.length > 200 && // Require substantial content
                                  downloadedFiles && downloadedFiles.length > 0; // Require backup history loaded
     
-    const outdatedMatch = shouldCheckOutdated && downloadedFiles.find(f => {
+    // IMPORTANT: Filter all potential matches first, then find the MOST RECENT outdated backup
+    const outdatedMatches = shouldCheckOutdated ? downloadedFiles.filter(f => {
       if (f.title !== title || f.contentSource !== currentSource) return false;
       if (f.conversationHash === currentHash) return false; // Hash matches, not outdated
       
@@ -1650,7 +1660,11 @@ function getBackupStatusSync(conversation, downloadedFiles) {
       }
       
       return true; // Different hash AND significant length change
-    });
+    }) : [];
+    
+    const outdatedMatch = outdatedMatches.length > 0
+      ? outdatedMatches.reduce((latest, current) => current.timestamp > latest.timestamp ? current : latest)
+      : null;
     
     if (outdatedMatch) {
       return {
@@ -1662,10 +1676,14 @@ function getBackupStatusSync(conversation, downloadedFiles) {
     }
     
     // Check if backup exists with same title (no hash match yet)
-    const sameTitle = downloadedFiles.find(f => 
+    // IMPORTANT: Find the MOST RECENT backup with same title AND content source
+    const sameTitleMatches = downloadedFiles.filter(f => 
       f.title === title &&
       f.contentSource === currentSource
     );
+    const sameTitle = sameTitleMatches.length > 0
+      ? sameTitleMatches.reduce((latest, current) => current.timestamp > latest.timestamp ? current : latest)
+      : null;
     
     if (sameTitle) {
       // Backup exists with same source (hash matched earlier, or this is fallback)
@@ -1681,16 +1699,20 @@ function getBackupStatusSync(conversation, downloadedFiles) {
     }
     
     // Check if backup exists but with different content source (upgrade candidate)
-    const upgradeCandidate = downloadedFiles.find(f => 
-      f.title === title && 
-      f.contentSource !== currentSource &&
-      currentSource === 'main_content'  // Current is full, backup is partial
-    );
+    // IMPORTANT: This should NOT trigger if a NEWER full backup exists
+    // Only show upgrade message if the most recent backup is partial but current is full
+    const allBackupsForTitle = downloadedFiles.filter(f => f.title === title);
+    const mostRecentBackup = allBackupsForTitle.length > 0
+      ? allBackupsForTitle.reduce((latest, current) => current.timestamp > latest.timestamp ? current : latest)
+      : null;
     
-    if (upgradeCandidate) {
+    // Only suggest upgrade if most recent backup is partial AND current is full
+    if (mostRecentBackup && 
+        mostRecentBackup.contentSource !== 'main_content' && 
+        currentSource === 'main_content') {
       return {
         icon: '⚠️',
-        label: `Partial backup exists (${new Date(upgradeCandidate.timestamp).toLocaleDateString()}) - can upgrade to full`,
+        label: `Partial backup exists (${new Date(mostRecentBackup.timestamp).toLocaleDateString()}) - can upgrade to full`,
         color: '#ffc107',
         bold: true
       };

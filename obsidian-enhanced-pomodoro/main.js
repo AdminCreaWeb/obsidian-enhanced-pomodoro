@@ -683,6 +683,80 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       }
     }, 5e3);
   }
+  // Column Detection Helper Functions
+  isProgressColumn(columnTitle) {
+    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, "").trim();
+    return normalized.includes("in progress") || normalized.includes("phase progress") || normalized.includes("current tasks") || normalized.includes("phase completion") || normalized === "doing" || normalized === "progress";
+  }
+  isDoneColumn(columnTitle) {
+    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, "").trim();
+    return normalized.includes("\u2705 done") || normalized.includes("done") || normalized.includes("phase - done") || normalized.includes("completed") || normalized.includes("code improvements completed") || normalized === "finished";
+  }
+  findColumnsByType(type) {
+    const columns = [];
+    const groups = this.tasksContainer?.querySelectorAll(".pomodoro-task-group") || [];
+    groups.forEach((group) => {
+      const titleElement = group.querySelector(".pomodoro-column-header .column-title");
+      if (titleElement) {
+        const title = titleElement.textContent || "";
+        const isMatch = type === "progress" ? this.isProgressColumn(title) : this.isDoneColumn(title);
+        if (isMatch) {
+          columns.push({ element: group, title });
+        }
+      }
+    });
+    return columns;
+  }
+  async moveTaskToColumn(taskId, targetColumnName) {
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return false;
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian.TFile)) return false;
+      const content = await this.app.vault.read(file);
+      const lines = content.split("\n");
+      let taskLine = null;
+      let taskLineIndex = -1;
+      let currentColumn = "";
+      let targetColumnIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith("## ")) {
+          currentColumn = line.substring(3).trim();
+          if (this.isProgressColumn(currentColumn) || this.isDoneColumn(currentColumn)) {
+            if (targetColumnName === "progress" && this.isProgressColumn(currentColumn) || targetColumnName === "done" && this.isDoneColumn(currentColumn)) {
+              targetColumnIndex = i;
+            }
+          }
+        }
+        if (line.includes(taskId) || taskId && line.includes(taskId.split("-").slice(-1)[0])) {
+          taskLine = line;
+          taskLineIndex = i;
+        }
+      }
+      if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
+        lines.splice(taskLineIndex, 1);
+        lines.splice(targetColumnIndex + 1, 0, taskLine);
+        await this.app.vault.modify(file, lines.join("\n"));
+        await this.loadKanbanTasks(boardPath);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("Error moving task:", error);
+      return false;
+    }
+  }
+  scrollToColumn(columnElement) {
+    if (!this.tasksContainer) return;
+    const containerRect = this.tasksContainer.getBoundingClientRect();
+    const columnRect = columnElement.getBoundingClientRect();
+    const scrollLeft = columnElement.offsetLeft - 20;
+    this.tasksContainer.scrollTo({
+      left: scrollLeft,
+      behavior: "smooth"
+    });
+  }
   async addKanbanBoardSelector(container) {
     let selectorContainer = null;
     try {
@@ -1040,6 +1114,22 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           cls: "column-title"
         });
         const taskList = taskGroup.createEl("ul", { cls: "pomodoro-task-list" });
+        taskList.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          taskList.classList.add("drag-over");
+        });
+        taskList.addEventListener("dragleave", () => {
+          taskList.classList.remove("drag-over");
+        });
+        taskList.addEventListener("drop", async (e) => {
+          e.preventDefault();
+          taskList.classList.remove("drag-over");
+          const draggedTaskId = e.dataTransfer?.getData("text/plain");
+          if (!draggedTaskId) return;
+          const targetColumnName = columnName;
+          new import_obsidian.Notice(`Moving task to "${targetColumnName}" - manual drag & drop (coming soon)`);
+        });
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
           const taskItem = taskList.createEl("li", {
@@ -1056,6 +1146,24 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           checkbox.addEventListener("change", async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass("task-completed", checkbox.checked);
+            if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
+              const currentGroupEl = taskItem.closest(".pomodoro-task-group");
+              const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
+              if (!this.isDoneColumn(currentColumnTitle)) {
+                const doneColumns = this.findColumnsByType("done");
+                if (doneColumns.length === 0) {
+                  new import_obsidian.Notice('No "Done" column found on this board. Consider disabling auto-move in settings.');
+                } else if (doneColumns.length > 1) {
+                  const columnNames = doneColumns.map((c) => c.title).join(", ");
+                  new import_obsidian.Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
+                } else {
+                  const success = await this.moveTaskToColumn(taskId, "done");
+                  if (success) {
+                    new import_obsidian.Notice(`Task moved to "${doneColumns[0].title}"`);
+                  }
+                }
+              }
+            }
           });
           taskContent.createSpan({ text: task.text, cls: "task-text" });
           const taskTimer = taskContent.createSpan({ text: "", cls: "task-timer" });
@@ -1070,6 +1178,15 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           }
           taskItem.addEventListener("click", () => {
             this.selectTask(taskId, taskItem, taskTimer);
+          });
+          taskItem.draggable = true;
+          taskItem.addEventListener("dragstart", (e) => {
+            e.dataTransfer?.setData("text/plain", taskId);
+            e.dataTransfer.effectAllowed = "move";
+            taskItem.classList.add("dragging");
+          });
+          taskItem.addEventListener("dragend", () => {
+            taskItem.classList.remove("dragging");
           });
           if (this.plugin.settings.currentTask === taskId) {
             this.selectTask(taskId, taskItem, taskTimer);
@@ -1101,6 +1218,13 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     }
   }
   async selectTask(taskId, taskElement, timerElement) {
+    if (this.warningElement) {
+      this.warningElement.style.display = "none";
+    }
+    if (this.warningTimeout !== null) {
+      window.clearTimeout(this.warningTimeout);
+      this.warningTimeout = null;
+    }
     const taskText = taskElement.querySelector(".task-text")?.textContent || "Unknown Task";
     const kanbanFile = this.plugin.settings.kanbanBoardPath || "No Kanban Selected";
     const kanbanFileName = kanbanFile.split("/").pop()?.replace(".md", "") || "Unknown";
@@ -1110,6 +1234,35 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       this.showCompletedTaskWarning(taskText);
       console.log("[TASK SELECTION] Cannot select completed task:", taskText);
       return;
+    }
+    if (this.plugin.settings.restrictToProgressTasks) {
+      const groupEl = taskElement.closest(".pomodoro-task-group");
+      const columnTitle = groupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
+      if (!this.isProgressColumn(columnTitle)) {
+        this.showCompletedTaskWarning(`Task must be in progress column to start timer. Current: "${columnTitle}"`);
+        console.log("[TASK SELECTION] Task not in progress column:", columnTitle);
+        return;
+      }
+    }
+    if (this.plugin.settings.autoMoveToProgress) {
+      const currentGroupEl = taskElement.closest(".pomodoro-task-group");
+      const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
+      if (!this.isProgressColumn(currentColumnTitle)) {
+        const progressColumns = this.findColumnsByType("progress");
+        if (progressColumns.length === 0) {
+          new import_obsidian.Notice('No "In Progress" column found on this board. Consider disabling auto-move in settings.');
+        } else if (progressColumns.length > 1) {
+          const columnNames = progressColumns.map((c) => c.title).join(", ");
+          new import_obsidian.Notice(`Multiple progress columns found: ${columnNames}. Consider disabling auto-move in settings.`);
+        } else {
+          const success = await this.moveTaskToColumn(taskId, "progress");
+          if (success) {
+            this.scrollToColumn(progressColumns[0].element);
+            new import_obsidian.Notice(`Task moved to "${progressColumns[0].title}"`);
+            return;
+          }
+        }
+      }
     }
     console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
     console.log("[TASK SELECTION] Switching task");
@@ -1313,7 +1466,10 @@ var DEFAULT_SETTINGS = {
   enableQuickBreak: true,
   quickBreakDuration: 5,
   quickBreakSound: "default",
-  sessionsCompletedCount: 0
+  sessionsCompletedCount: 0,
+  autoMoveToProgress: true,
+  autoMoveToDone: true,
+  restrictToProgressTasks: false
 };
 var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   constructor() {
@@ -1415,6 +1571,9 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       }
     }, 0);
   }
+  refreshSoundsPreview(containerEl) {
+    new import_obsidian2.Notice("Sound previews are automatically updated! Just click Test after changing the dropdown.");
+  }
   updateKanbanList(container, files, searchInput) {
     const listContainer = container.querySelector(".kanban-list") || container.createDiv({ cls: "kanban-list" });
     listContainer.empty();
@@ -1514,6 +1673,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   }
   async loadSettings() {
     try {
+      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
       const loadedSettings = await this.loadData();
       this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
       if (!this.settings.schedules || this.settings.schedules.length === 0) {
@@ -1755,6 +1915,17 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.3);
+      } else if (sound === "default") {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        oscillator.frequency.value = 693;
+        oscillator.type = "sine";
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.8);
       }
     } catch (e) {
       console.error("Error playing sound:", e);
@@ -2442,6 +2613,25 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       button.setIcon("refresh-cw").setTooltip("Refresh Kanban board list").onClick(() => this.plugin.refreshKanbanList(kanbanBoardSetting.controlEl));
     });
     this.plugin.refreshKanbanList(kanbanBoardSetting.controlEl);
+    containerEl.createEl("h3", { text: "Kanban Auto-Move Settings" });
+    new import_obsidian2.Setting(containerEl).setName("Auto-move to Progress").setDesc('Automatically move selected tasks to the "In Progress" column (or equivalent)').addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoMoveToProgress).onChange(async (value) => {
+        this.plugin.settings.autoMoveToProgress = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Auto-move completed to Done").setDesc('Automatically move checked tasks to the "Done" column (or equivalent)').addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoMoveToDone).onChange(async (value) => {
+        this.plugin.settings.autoMoveToDone = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Restrict to Progress tasks only").setDesc('Only allow tasks in "In Progress" column to start/continue timer').addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.restrictToProgressTasks).onChange(async (value) => {
+        this.plugin.settings.restrictToProgressTasks = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian2.Setting(containerEl).setName("Log File").setDesc('Path to the log file (e.g., "Pomodoro Log.md")').addText(
       (text) => text.setValue(this.plugin.settings.logFile).onChange(async (value) => {
         this.plugin.settings.logFile = value;
@@ -2472,9 +2662,17 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       });
     }).setDisabled(!this.plugin.settings.enableQuickBreak);
     new import_obsidian2.Setting(containerEl).setName("Break Sounds").setHeading();
-    new import_obsidian2.Setting(containerEl).setName("Quick Break Sound").setDesc("Three quick beeps at 432Hz").addButton(
+    new import_obsidian2.Setting(containerEl).addButton((button) => {
+      button.setIcon("refresh-sp").setTooltip("Refresh SoundsPreview").onClick(() => this.plugin.refreshSoundsPreview(kanbanBoardSetting.controlEl));
+    });
+    new import_obsidian2.Setting(containerEl).setName("Quick Break Sound Preview").setDesc("Test the currently selected quick break sound").addButton(
       (button) => button.setButtonText("Test").onClick(() => {
-        this.plugin.playSound("quickbreak");
+        const selectedSound = this.plugin.settings.quickBreakSound;
+        if (selectedSound !== "none") {
+          this.plugin.playSound(selectedSound);
+        } else {
+          new import_obsidian2.Notice('Quick break sound is set to "None"');
+        }
       })
     );
     new import_obsidian2.Setting(containerEl).setName("Short Break Sound").setDesc("Three quick beeps at 693Hz").addButton(

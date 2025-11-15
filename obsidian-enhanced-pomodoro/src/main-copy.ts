@@ -100,10 +100,6 @@ interface EnhancedPomodoroSettings {
   kanbanIntegration: boolean;
   // Persist sessions completed count
   sessionsCompletedCount: number;
-  // Auto-move tasks between columns
-  autoMoveToProgress: boolean;
-  autoMoveToDone: boolean;
-  restrictToProgressTasks: boolean;
 }
 
 const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
@@ -136,10 +132,7 @@ const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
   enableQuickBreak: true,
   quickBreakDuration: 5,
   quickBreakSound: 'default',
-  sessionsCompletedCount: 0,
-  autoMoveToProgress: true,
-  autoMoveToDone: true,
-  restrictToProgressTasks: false
+  sessionsCompletedCount: 0
 };
 
 export default class EnhancedPomodoro extends Plugin {
@@ -268,13 +261,6 @@ export default class EnhancedPomodoro extends Plugin {
         this.updateKanbanList(settingsContainer, kanbanFiles, searchInput);
       }
     }, 0);
-  }
-
-  refreshSoundsPreview(containerEl: HTMLElement) {
-    // Rebuild the sound preview section
-    // This is called when the refresh button is clicked
-    // For now, just show a message that settings are live-updated
-    new Notice('Sound previews are automatically updated! Just click Test after changing the dropdown.');
   }
 
   private updateKanbanList(container: HTMLElement, files: TFile[], searchInput: HTMLInputElement): void {
@@ -1734,42 +1720,6 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     // Initial load of Kanban files
     this.plugin.refreshKanbanList(kanbanBoardSetting.controlEl);
 
-    // Kanban Auto-Move Settings
-    containerEl.createEl('h3', { text: 'Kanban Auto-Move Settings' });
-
-    new Setting(containerEl)
-      .setName('Auto-move to Progress')
-      .setDesc('Automatically move selected tasks to the "In Progress" column (or equivalent)')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.autoMoveToProgress)
-        .onChange(async (value) => {
-          this.plugin.settings.autoMoveToProgress = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName('Auto-move completed to Done')
-      .setDesc('Automatically move checked tasks to the "Done" column (or equivalent)')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.autoMoveToDone)
-        .onChange(async (value) => {
-          this.plugin.settings.autoMoveToDone = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName('Restrict to Progress tasks only')
-      .setDesc('Only allow tasks in "In Progress" column to start/continue timer')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.restrictToProgressTasks)
-        .onChange(async (value) => {
-          this.plugin.settings.restrictToProgressTasks = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
     new Setting(containerEl)
       .setName('Log File')
       .setDesc('Path to the log file (e.g., "Pomodoro Log.md")')
@@ -1835,29 +1785,15 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Break Sounds')
       .setHeading();
-    
-    // Add refresh button
-    new Setting(containerEl).addButton(button => {
-      button
-        .setIcon('refresh-sp')
-        .setTooltip('Refresh SoundsPreview')
-        .onClick(() => this.plugin.refreshSoundsPreview(kanbanBoardSetting.controlEl));
-    });
 
 
     new Setting(containerEl)
-      .setName('Quick Break Sound Preview')
-      .setDesc('Test the currently selected quick break sound')
+      .setName('Quick Break Sound')
+      .setDesc('Three quick beeps at 432Hz')
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
-          // Play the sound selected in the dropdown above
-          const selectedSound = this.plugin.settings.quickBreakSound;
-          if (selectedSound !== 'none') {
-            this.plugin.playSound(selectedSound);
-          } else {
-            new Notice('Quick break sound is set to "None"');
-          }
+          this.plugin.playSound('quickbreak');
         })
       );
       
