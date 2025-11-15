@@ -707,54 +707,124 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     });
     return columns;
   }
-  async moveTaskToColumn(taskId, targetColumnName) {
+  async moveTaskToColumn(taskId, targetColumnType) {
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
       if (!boardPath) return false;
       const file = this.app.vault.getAbstractFileByPath(boardPath);
       if (!(file instanceof import_obsidian.TFile)) return false;
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) {
+        console.log("[MOVE TASK] Task element not found for ID:", taskId);
+        return false;
+      }
+      const taskText = taskElement.querySelector(".task-text")?.textContent || "";
+      if (!taskText) {
+        console.log("[MOVE TASK] Task text not found");
+        return false;
+      }
+      console.log("[MOVE TASK] Looking for task:", taskText);
       const content = await this.app.vault.read(file);
       const lines = content.split("\n");
       let taskLine = null;
       let taskLineIndex = -1;
-      let currentColumn = "";
       let targetColumnIndex = -1;
+      let targetColumnEndIndex = -1;
+      let currentColumn = "";
+      let inTargetColumn = false;
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        const line = lines[i].trim();
         if (line.startsWith("## ")) {
           currentColumn = line.substring(3).trim();
-          if (this.isProgressColumn(currentColumn) || this.isDoneColumn(currentColumn)) {
-            if (targetColumnName === "progress" && this.isProgressColumn(currentColumn) || targetColumnName === "done" && this.isDoneColumn(currentColumn)) {
-              targetColumnIndex = i;
-            }
+          inTargetColumn = false;
+          if (targetColumnType === "progress" && this.isProgressColumn(currentColumn) || targetColumnType === "done" && this.isDoneColumn(currentColumn)) {
+            targetColumnIndex = i;
+            inTargetColumn = true;
+            console.log("[MOVE TASK] Found target column:", currentColumn, "at line", i);
           }
         }
-        if (line.includes(taskId) || taskId && line.includes(taskId.split("-").slice(-1)[0])) {
-          taskLine = line;
+        if (inTargetColumn && targetColumnIndex >= 0) {
+          if (i > targetColumnIndex && (line.startsWith("## ") || i === lines.length - 1)) {
+            targetColumnEndIndex = line.startsWith("## ") ? i - 1 : i;
+            inTargetColumn = false;
+          }
+        }
+        if ((line.startsWith("- [ ]") || line.startsWith("- [x]")) && line.includes(taskText)) {
+          taskLine = lines[i];
           taskLineIndex = i;
+          console.log("[MOVE TASK] Found task at line", i, ":", line);
         }
       }
+      if (targetColumnIndex >= 0 && targetColumnEndIndex === -1) {
+        targetColumnEndIndex = lines.length - 1;
+      }
       if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
+        console.log("[MOVE TASK] Moving task:", {
+          taskText,
+          fromLine: taskLineIndex,
+          toColumn: lines[targetColumnIndex],
+          toLine: targetColumnEndIndex
+        });
         lines.splice(taskLineIndex, 1);
-        lines.splice(targetColumnIndex + 1, 0, taskLine);
+        if (taskLineIndex < targetColumnEndIndex) {
+          targetColumnEndIndex--;
+        }
+        let insertIndex = targetColumnIndex + 1;
+        if (insertIndex <= targetColumnEndIndex && lines[insertIndex]?.trim() === "") {
+          insertIndex++;
+        }
+        let lastTaskIndex = insertIndex - 1;
+        for (let i = insertIndex; i <= targetColumnEndIndex; i++) {
+          const line = lines[i].trim();
+          if (line.startsWith("- [ ]") || line.startsWith("- [x]")) {
+            lastTaskIndex = i;
+          }
+        }
+        insertIndex = lastTaskIndex + 1;
+        if (targetColumnType === "done" && taskLine.includes("- [ ]")) {
+          taskLine = taskLine.replace("- [ ]", "- [x]");
+        }
+        if (targetColumnType === "progress" && taskLine.includes("- [x]")) {
+          taskLine = taskLine.replace("- [x]", "- [ ]");
+        }
+        lines.splice(insertIndex, 0, taskLine);
         await this.app.vault.modify(file, lines.join("\n"));
-        await this.loadKanbanTasks(boardPath);
+        console.log("[MOVE TASK] Task moved successfully to line", insertIndex);
+        setTimeout(async () => {
+          await this.loadKanbanTasks(boardPath);
+        }, 150);
         return true;
       }
+      console.log("[MOVE TASK] Failed to move task:", {
+        taskFound: !!taskLine,
+        taskIndex: taskLineIndex,
+        targetFound: targetColumnIndex >= 0
+      });
       return false;
     } catch (error) {
-      console.error("Error moving task:", error);
+      console.error("[MOVE TASK] Error moving task:", error);
       return false;
     }
   }
   scrollToColumn(columnElement) {
-    if (!this.tasksContainer) return;
+    if (!this.tasksContainer) {
+      console.log("[SCROLL] No tasks container found");
+      return;
+    }
+    const containerStyles = window.getComputedStyle(this.tasksContainer);
+    console.log("[SCROLL] Container overflow-x:", containerStyles.overflowX);
     const containerRect = this.tasksContainer.getBoundingClientRect();
     const columnRect = columnElement.getBoundingClientRect();
     const scrollLeft = columnElement.offsetLeft - 20;
-    this.tasksContainer.scrollTo({
-      left: scrollLeft,
-      behavior: "smooth"
+    this.tasksContainer.scrollLeft = scrollLeft;
+    console.log("[SCROLL] Scrolling to column:", {
+      columnLeft: columnElement.offsetLeft,
+      columnRect: columnRect.left,
+      containerRect: containerRect.left,
+      scrollTo: scrollLeft,
+      currentScroll: this.tasksContainer.scrollLeft,
+      containerWidth: this.tasksContainer.offsetWidth,
+      containerScrollWidth: this.tasksContainer.scrollWidth
     });
   }
   async addKanbanBoardSelector(container) {
@@ -1157,9 +1227,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
                   const columnNames = doneColumns.map((c) => c.title).join(", ");
                   new import_obsidian.Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
                 } else {
+                  const doneTitle = doneColumns[0].title;
                   const success = await this.moveTaskToColumn(taskId, "done");
                   if (success) {
-                    new import_obsidian.Notice(`Task moved to "${doneColumns[0].title}"`);
+                    new import_obsidian.Notice(`Task moved to "${doneTitle}"`);
+                    setTimeout(() => {
+                      const newDoneColumns = this.findColumnsByType("done");
+                      if (newDoneColumns.length > 0) {
+                        this.scrollToColumn(newDoneColumns[0].element);
+                      }
+                    }, 200);
                   }
                 }
               }
@@ -1255,10 +1332,32 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           const columnNames = progressColumns.map((c) => c.title).join(", ");
           new import_obsidian.Notice(`Multiple progress columns found: ${columnNames}. Consider disabling auto-move in settings.`);
         } else {
+          const progressTitle = progressColumns[0].title;
           const success = await this.moveTaskToColumn(taskId, "progress");
           if (success) {
-            this.scrollToColumn(progressColumns[0].element);
-            new import_obsidian.Notice(`Task moved to "${progressColumns[0].title}"`);
+            new import_obsidian.Notice(`Task moved to "${progressTitle}"`);
+            setTimeout(() => {
+              const newProgressColumns = this.findColumnsByType("progress");
+              console.log("[AUTO-MOVE] Found progress columns after reload:", newProgressColumns.length);
+              if (newProgressColumns.length > 0) {
+                this.scrollToColumn(newProgressColumns[0].element);
+                setTimeout(() => {
+                  const tasksInProgress = newProgressColumns[0].element.querySelectorAll(".pomodoro-task-item");
+                  console.log("[AUTO-MOVE] Looking for task in progress column, found", tasksInProgress.length, "tasks");
+                  tasksInProgress.forEach((task) => {
+                    const taskTextEl = task.querySelector(".task-text");
+                    if (taskTextEl && taskTextEl.textContent === taskText) {
+                      console.log("[AUTO-MOVE] Found moved task, selecting it");
+                      const htmlTask = task;
+                      const timerEl = htmlTask.querySelector(".task-timer");
+                      if (timerEl) {
+                        this.selectTask(htmlTask.getAttribute("data-task-id") || "", htmlTask, timerEl);
+                      }
+                    }
+                  });
+                }, 100);
+              }
+            }, 250);
             return;
           }
         }

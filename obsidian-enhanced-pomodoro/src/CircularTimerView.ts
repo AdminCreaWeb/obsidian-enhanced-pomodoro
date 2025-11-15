@@ -915,7 +915,7 @@ export class CircularTimerView extends ItemView {
     return columns;
   }
 
-  private async moveTaskToColumn(taskId: string, targetColumnName: string): Promise<boolean> {
+  private async moveTaskToColumn(taskId: string, targetColumnType: 'progress' | 'done'): Promise<boolean> {
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
       if (!boardPath) return false;
@@ -923,72 +923,174 @@ export class CircularTimerView extends ItemView {
       const file = this.app.vault.getAbstractFileByPath(boardPath);
       if (!(file instanceof TFile)) return false;
 
-      const content = await this.app.vault.read(file);
+      // Get the task element to find its text
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) {
+        console.log('[MOVE TASK] Task element not found for ID:', taskId);
+        return false;
+      }
       
-      // Parse the Kanban markdown content
-      // This is a simplified implementation - you may need to adjust based on your exact Kanban format
+      const taskText = taskElement.querySelector('.task-text')?.textContent || '';
+      if (!taskText) {
+        console.log('[MOVE TASK] Task text not found');
+        return false;
+      }
+
+      console.log('[MOVE TASK] Looking for task:', taskText);
+
+      const content = await this.app.vault.read(file);
       const lines = content.split('\n');
+      
       let taskLine: string | null = null;
       let taskLineIndex = -1;
-      let currentColumn = '';
       let targetColumnIndex = -1;
+      let targetColumnEndIndex = -1;
+      let currentColumn = '';
+      let inTargetColumn = false;
       
-      // Find the task and its current position
+      // First pass: find the task and identify target column
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        const line = lines[i].trim();
         
         // Check if this is a column header
         if (line.startsWith('## ')) {
           currentColumn = line.substring(3).trim();
-          if (this.isProgressColumn(currentColumn) || this.isDoneColumn(currentColumn)) {
-            if ((targetColumnName === 'progress' && this.isProgressColumn(currentColumn)) ||
-                (targetColumnName === 'done' && this.isDoneColumn(currentColumn))) {
-              targetColumnIndex = i;
-            }
+          inTargetColumn = false;
+          
+          // Check if this is our target column
+          if ((targetColumnType === 'progress' && this.isProgressColumn(currentColumn)) ||
+              (targetColumnType === 'done' && this.isDoneColumn(currentColumn))) {
+            targetColumnIndex = i;
+            inTargetColumn = true;
+            console.log('[MOVE TASK] Found target column:', currentColumn, 'at line', i);
           }
         }
         
-        // Check if this line contains our task
-        if (line.includes(taskId) || (taskId && line.includes(taskId.split('-').slice(-1)[0]))) {
-          taskLine = line;
-          taskLineIndex = i;
+        // Find the end of target column
+        if (inTargetColumn && targetColumnIndex >= 0) {
+          if (i > targetColumnIndex && (line.startsWith('## ') || i === lines.length - 1)) {
+            targetColumnEndIndex = line.startsWith('## ') ? i - 1 : i;
+            inTargetColumn = false;
+          }
         }
+        
+        // Check if this line is a task that contains our text
+        // Match both unchecked (- [ ]) and checked (- [x]) tasks
+        if ((line.startsWith('- [ ]') || line.startsWith('- [x]')) && line.includes(taskText)) {
+          taskLine = lines[i]; // Use original line with indentation
+          taskLineIndex = i;
+          console.log('[MOVE TASK] Found task at line', i, ':', line);
+        }
+      }
+      
+      // If we didn't find the end of target column, set it to end of file
+      if (targetColumnIndex >= 0 && targetColumnEndIndex === -1) {
+        targetColumnEndIndex = lines.length - 1;
       }
       
       // Move the task if found
       if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
+        console.log('[MOVE TASK] Moving task:', {
+          taskText,
+          fromLine: taskLineIndex,
+          toColumn: lines[targetColumnIndex],
+          toLine: targetColumnEndIndex
+        });
+        
         // Remove from current position
         lines.splice(taskLineIndex, 1);
         
-        // Insert after target column header
-        lines.splice(targetColumnIndex + 1, 0, taskLine);
+        // Adjust indices if removal affected them
+        if (taskLineIndex < targetColumnEndIndex) {
+          targetColumnEndIndex--;
+        }
+        
+        // Find the right place to insert
+        // Look for the first task line or empty section after the header
+        let insertIndex = targetColumnIndex + 1;
+        
+        // Skip the first empty line after header if it exists
+        if (insertIndex <= targetColumnEndIndex && lines[insertIndex]?.trim() === '') {
+          insertIndex++;
+        }
+        
+        // Find where existing tasks end in target column (if any)
+        let lastTaskIndex = insertIndex - 1;
+        for (let i = insertIndex; i <= targetColumnEndIndex; i++) {
+          const line = lines[i].trim();
+          if (line.startsWith('- [ ]') || line.startsWith('- [x]')) {
+            lastTaskIndex = i;
+          }
+        }
+        
+        // Insert after the last task, or after the header if no tasks
+        insertIndex = lastTaskIndex + 1;
+        
+        // For done tasks, mark as completed
+        if (targetColumnType === 'done' && taskLine.includes('- [ ]')) {
+          taskLine = taskLine.replace('- [ ]', '- [x]');
+        }
+        
+        // For progress tasks, ensure they're unchecked
+        if (targetColumnType === 'progress' && taskLine.includes('- [x]')) {
+          taskLine = taskLine.replace('- [x]', '- [ ]');
+        }
+        
+        // Insert at the right position
+        lines.splice(insertIndex, 0, taskLine);
         
         // Write back to file
         await this.app.vault.modify(file, lines.join('\n'));
+        console.log('[MOVE TASK] Task moved successfully to line', insertIndex);
         
-        // Reload tasks to update UI
-        await this.loadKanbanTasks(boardPath);
+        // Small delay before reloading to ensure file is written
+        setTimeout(async () => {
+          await this.loadKanbanTasks(boardPath);
+        }, 150);
+        
         return true;
       }
       
+      console.log('[MOVE TASK] Failed to move task:', {
+        taskFound: !!taskLine,
+        taskIndex: taskLineIndex,
+        targetFound: targetColumnIndex >= 0
+      });
       return false;
     } catch (error) {
-      console.error('Error moving task:', error);
+      console.error('[MOVE TASK] Error moving task:', error);
       return false;
     }
   }
 
   private scrollToColumn(columnElement: HTMLElement) {
-    if (!this.tasksContainer) return;
+    if (!this.tasksContainer) {
+      console.log('[SCROLL] No tasks container found');
+      return;
+    }
     
-    // Smooth scroll to bring the column into view
+    // Ensure the container is scrollable horizontally
+    const containerStyles = window.getComputedStyle(this.tasksContainer);
+    console.log('[SCROLL] Container overflow-x:', containerStyles.overflowX);
+    
+    // Calculate the scroll position - account for container's position
     const containerRect = this.tasksContainer.getBoundingClientRect();
     const columnRect = columnElement.getBoundingClientRect();
-    const scrollLeft = columnElement.offsetLeft - 20; // 20px padding
     
-    this.tasksContainer.scrollTo({
-      left: scrollLeft,
-      behavior: 'smooth'
+    // Calculate how much to scroll
+    const scrollLeft = columnElement.offsetLeft - 20; // 20px padding from left
+    
+    // Use scrollLeft directly for better compatibility
+    this.tasksContainer.scrollLeft = scrollLeft;
+    
+    console.log('[SCROLL] Scrolling to column:', {
+      columnLeft: columnElement.offsetLeft,
+      columnRect: columnRect.left,
+      containerRect: containerRect.left,
+      scrollTo: scrollLeft,
+      currentScroll: this.tasksContainer.scrollLeft,
+      containerWidth: this.tasksContainer.offsetWidth,
+      containerScrollWidth: this.tasksContainer.scrollWidth
     });
   }
 
@@ -1559,10 +1661,17 @@ export class CircularTimerView extends ItemView {
                   new Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
                 } else {
                   // Move to the single done column
+                  const doneTitle = doneColumns[0].title;
                   const success = await this.moveTaskToColumn(taskId, 'done');
                   if (success) {
-                    new Notice(`Task moved to "${doneColumns[0].title}"`);
-                    // The UI will be refreshed automatically by moveTaskToColumn
+                    new Notice(`Task moved to "${doneTitle}"`);
+                    // Wait for reload to complete, then scroll to the done column
+                    setTimeout(() => {
+                      const newDoneColumns = this.findColumnsByType('done');
+                      if (newDoneColumns.length > 0) {
+                        this.scrollToColumn(newDoneColumns[0].element);
+                      }
+                    }, 200);
                   }
                 }
               }
@@ -1689,11 +1798,38 @@ export class CircularTimerView extends ItemView {
           new Notice(`Multiple progress columns found: ${columnNames}. Consider disabling auto-move in settings.`);
         } else {
           // Move to the single progress column
+          const progressTitle = progressColumns[0].title;
           const success = await this.moveTaskToColumn(taskId, 'progress');
           if (success) {
-            // Scroll to the progress column
-            this.scrollToColumn(progressColumns[0].element);
-            new Notice(`Task moved to "${progressColumns[0].title}"`);
+            new Notice(`Task moved to "${progressTitle}"`);
+            // Wait for reload to complete, then scroll to the column
+            setTimeout(() => {
+              const newProgressColumns = this.findColumnsByType('progress');
+              console.log('[AUTO-MOVE] Found progress columns after reload:', newProgressColumns.length);
+              
+              if (newProgressColumns.length > 0) {
+                // Scroll to the progress column
+                this.scrollToColumn(newProgressColumns[0].element);
+                
+                // Find and select the task by its text content in the new column
+                setTimeout(() => {
+                  const tasksInProgress = newProgressColumns[0].element.querySelectorAll('.pomodoro-task-item');
+                  console.log('[AUTO-MOVE] Looking for task in progress column, found', tasksInProgress.length, 'tasks');
+                  
+                  tasksInProgress.forEach(task => {
+                    const taskTextEl = task.querySelector('.task-text');
+                    if (taskTextEl && taskTextEl.textContent === taskText) {
+                      console.log('[AUTO-MOVE] Found moved task, selecting it');
+                      const htmlTask = task as HTMLElement;
+                      const timerEl = htmlTask.querySelector('.task-timer') as HTMLElement;
+                      if (timerEl) {
+                        this.selectTask(htmlTask.getAttribute('data-task-id') || '', htmlTask, timerEl);
+                      }
+                    }
+                  });
+                }, 100);
+              }
+            }, 250);
             // Return early as the task will be reloaded
             return;
           }

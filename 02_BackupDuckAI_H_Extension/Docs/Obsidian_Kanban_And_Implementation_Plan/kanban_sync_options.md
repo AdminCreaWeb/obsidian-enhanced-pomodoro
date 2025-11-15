@@ -193,7 +193,6 @@ Open: _Implementation_Plan_Kanban.md
 Click: "..." (three dots) → "Open as Kanban Board"
 ```
 
-### 3. Open Quick Dashboard
 ```
 Open: _Quick_Dashboard.md
 (Opens as normal markdown - that's correct!)
@@ -224,7 +223,6 @@ End of Day:
 ┌──────────┬──────────┬──────────┬──────────┐
 │ Backlog  │ To Do    │ Progress │ Done     │
 ├──────────┼──────────┼──────────┼──────────┤
-│ 50 tasks │ Test in  │ [empty]  │ Fix      │
 │          │ Brave    │          │ Select   │
 │          │          │          │ All      │
 │          │ Test in  │          │          │
@@ -243,10 +241,12 @@ End of Day:
 - [ ] Verify dates
 
 ## In Progress
+### 3. Open Quick Dashboard
 [empty]
 
 ## Done
 - [x] Fix Select All
+│ 50 tasks │ Test in  │ [empty]  │ Fix      │
 - [x] Fix Backup Status
 
 Next Action: Test in Brave
