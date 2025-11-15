@@ -55,18 +55,36 @@
             "id": "ff4bea425b06167f",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "kanban",
               "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
-                "mode": "source",
-                "source": false
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": []
+                }
               },
-              "icon": "lucide-file",
-              "title": "kanban_sync_options"
+              "icon": "lucide-trello",
+              "title": "_Implementation_Plan_Kanban"
+            }
+          },
+          {
+            "id": "19ae4940324d905b",
+            "type": "leaf",
+            "state": {
+              "type": "kanban",
+              "state": {
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": []
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "_Implementation_Plan_Kanban"
             }
           }
         ],
-        "currentTab": 3
+        "currentTab": 4
       }
     ],
     "direction": "vertical"
@@ -129,8 +147,7 @@
               "title": "Task progress bar"
             }
           }
-        ],
-        "currentTab": 3
+        ]
       }
     ],
     "direction": "horizontal",
@@ -198,17 +215,17 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of kanban_sync_options"
+              "title": "Outline of _Implementation_Plan_Kanban"
             }
           },
           {
-            "id": "b2b9dcca495b1498",
+            "id": "2638ae2e3345f74d",
             "type": "leaf",
             "state": {
               "type": "circular-timer-view",
@@ -238,8 +255,9 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "b2b9dcca495b1498",
+  "active": "2638ae2e3345f74d",
   "lastOpenFiles": [
+    "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
     "Pomodoro Task Timers.md",
@@ -247,7 +265,6 @@
     "Spline integration.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
     "pomodoro-debug-log.md",
-    "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan.md",
     "Untitled Kanban.md",
     "Docs/Time_Tracking_Template.md",

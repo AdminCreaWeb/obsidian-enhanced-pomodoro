@@ -5,10 +5,6 @@ status: In Progress
 
 ## 📝 Backlog
 
-- [ ] Research AES-256-GCM implementation #encryption
-- [ ] Research ChaCha20-Poly1305 alternative #encryption
-- [ ] Design password entry UI #encryption
-- [ ] Design decryption tool page #encryption
 - [ ] Plan key derivation (PBKDF2) #encryption
 - [ ] Document file format (.encrypted.md) #encryption
 - [ ] Research `browser.alarms` API #scheduling
@@ -42,8 +38,6 @@ status: In Progress
 
 ## 📋 To Do - Phase 1 (Testing)
 
-- [ ] Load extension in Brave #testing #phase1
-- [ ] Load conversations from duck.ai #testing #phase1
 - [ ] Test "☑️ Select All" button functionality #testing #phase1
 - [ ] Test Quick Download with no selection (should warn) #testing #phase1
 - [ ] Test Quick Download with selection (should work) #testing #phase1
@@ -142,13 +136,16 @@ status: In Progress
 
 - [ ] Phase 1 (Testing): 🟡 60% (code done, testing pending)
 - [ ] Phase 2 (Planning): 🔴 0% (not started)
-- [ ] Phase 3 (Foundation): 🔴 0% (not started)
-- [ ] Phase 4 (Pro Features): 🔴 0% (not started)
-- [ ] Phase 5 (Release): 🔴 0% (not started)
 
 
 ## Tags Legend
 
+
+
+## Notes
+
+- [x] Phase 4 (Pro Features): 🔴 0% (not started)
+- [x] Phase 5 (Release): 🔴 0% (not started)
 - [ ] `#phase1` = Current phase (testing)
 - [ ] `#phase2` = Planning phase
 - [ ] `#phase3` = Foundation building
@@ -167,15 +164,18 @@ status: In Progress
 - [ ] `#docs` = Documentation
 - [ ] `#marketing` = Marketing materials
 - [ ] `#blocked` = Blocked tasks
-
-
-## Notes
-
 - [ ] Focus on Phase 1 completion before planning Pro features
 - [ ] Keep free version solid and stable
 - [ ] Pro features should enhance, not complicate
 - [ ] Maintain privacy-first approach (local backups)
 - [ ] Cross-browser compatibility is critical
+- [ ] Research AES-256-GCM implementation #encryption
+- [ ] Research ChaCha20-Poly1305 alternative #encryption
+- [ ] Design password entry UI #encryption
+- [ ] Design decryption tool page #encryption
+- [ ] Load extension in Brave #testing #phase1
+- [ ] Load conversations from duck.ai #testing #phase1
+- [x] Phase 3 (Foundation): 🔴 0% (not started)
 
 
 

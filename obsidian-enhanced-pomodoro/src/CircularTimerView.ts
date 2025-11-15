@@ -889,12 +889,11 @@ export class CircularTimerView extends ItemView {
 
   private isDoneColumn(columnTitle: string): boolean {
     const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, '').trim();
-    return normalized.includes('✅ done') ||
-           normalized.includes('done') ||
-           normalized.includes('phase - done') ||
+    return normalized.includes('done') ||  // This catches "Done - Phase 1 (Code)" 
+           normalized.includes('✅') ||    // Catches any column with checkmark emoji
            normalized.includes('completed') ||
-           normalized.includes('code improvements completed') ||
-           normalized === 'finished';
+           normalized.includes('finished') ||
+           normalized === 'complete';
   }
 
   private findColumnsByType(type: 'progress' | 'done'): { element: HTMLElement, title: string }[] {
@@ -948,29 +947,34 @@ export class CircularTimerView extends ItemView {
       let currentColumn = '';
       let inTargetColumn = false;
       
-      // First pass: find the task and identify target column
+      // First pass: find the task and identify ALL columns
+      const columns: { name: string, startIndex: number, endIndex: number }[] = [];
+      let lastColumnStart = -1;
+      
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         
         // Check if this is a column header
         if (line.startsWith('## ')) {
-          currentColumn = line.substring(3).trim();
-          inTargetColumn = false;
-          
-          // Check if this is our target column
-          if ((targetColumnType === 'progress' && this.isProgressColumn(currentColumn)) ||
-              (targetColumnType === 'done' && this.isDoneColumn(currentColumn))) {
-            targetColumnIndex = i;
-            inTargetColumn = true;
-            console.log('[MOVE TASK] Found target column:', currentColumn, 'at line', i);
+          // If we had a previous column, set its end
+          if (lastColumnStart >= 0) {
+            columns[columns.length - 1].endIndex = i - 1;
           }
-        }
-        
-        // Find the end of target column
-        if (inTargetColumn && targetColumnIndex >= 0) {
-          if (i > targetColumnIndex && (line.startsWith('## ') || i === lines.length - 1)) {
-            targetColumnEndIndex = line.startsWith('## ') ? i - 1 : i;
-            inTargetColumn = false;
+          
+          currentColumn = line.substring(3).trim();
+          columns.push({ name: currentColumn, startIndex: i, endIndex: lines.length - 1 });
+          lastColumnStart = i;
+          
+          // Check if this is our target column 
+          // Prefer "In Progress" over "Phase Progress", and "Done" over "Done - Phase X"
+          if (targetColumnIndex === -1 || 
+              (targetColumnType === 'progress' && currentColumn.includes('🚧') && !columns.find(c => c.startIndex === targetColumnIndex)?.name.includes('🚧')) ||
+              (targetColumnType === 'done' && currentColumn.includes('✅') && !columns.find(c => c.startIndex === targetColumnIndex)?.name.includes('✅'))) {
+            if ((targetColumnType === 'progress' && this.isProgressColumn(currentColumn)) ||
+                (targetColumnType === 'done' && this.isDoneColumn(currentColumn))) {
+              targetColumnIndex = i;
+              console.log('[MOVE TASK] Found target column:', currentColumn, 'at line', i);
+            }
           }
         }
         
@@ -980,6 +984,15 @@ export class CircularTimerView extends ItemView {
           taskLine = lines[i]; // Use original line with indentation
           taskLineIndex = i;
           console.log('[MOVE TASK] Found task at line', i, ':', line);
+        }
+      }
+      
+      // Find the actual end of the target column
+      if (targetColumnIndex >= 0) {
+        const targetCol = columns.find(c => c.startIndex === targetColumnIndex);
+        if (targetCol) {
+          targetColumnEndIndex = targetCol.endIndex;
+          console.log('[MOVE TASK] Target column ends at line', targetColumnEndIndex);
         }
       }
       
@@ -1046,7 +1059,9 @@ export class CircularTimerView extends ItemView {
         // Small delay before reloading to ensure file is written
         setTimeout(async () => {
           await this.loadKanbanTasks(boardPath);
-        }, 150);
+          // Trigger a UI update event
+          this.plugin.app.workspace.trigger('file-modified');
+        }, 200);
         
         return true;
       }
@@ -1060,6 +1075,35 @@ export class CircularTimerView extends ItemView {
     } catch (error) {
       console.error('[MOVE TASK] Error moving task:', error);
       return false;
+    }
+  }
+
+  private handlePostMoveActions(taskText: string, columnType: 'progress' | 'done') {
+    const columns = this.findColumnsByType(columnType);
+    if (columns.length > 0) {
+      // Prefer the main column over phase-specific columns
+      const targetColumn = columnType === 'progress' 
+        ? (columns.find(c => c.title.includes('In Progress')) || columns[0])
+        : (columns.find(c => c.title.includes('Done') && !c.title.includes('Phase')) || columns[0]);
+        
+      this.scrollToColumn(targetColumn.element);
+      
+      // Find and select the moved task
+      const tasksInColumn = targetColumn.element.querySelectorAll('.pomodoro-task-item');
+      tasksInColumn.forEach(task => {
+        const taskTextEl = task.querySelector('.task-text');
+        if (taskTextEl && taskTextEl.textContent === taskText) {
+          const htmlTask = task as HTMLElement;
+          const timerEl = htmlTask.querySelector('.task-timer') as HTMLElement;
+          if (timerEl) {
+            const newTaskId = htmlTask.getAttribute('data-task-id') || '';
+            // Update active task without triggering another move
+            this.activeTaskId = newTaskId;
+            this.plugin.settings.currentTask = newTaskId;
+            htmlTask.classList.add('pomodoro-task-active');
+          }
+        }
+      });
     }
   }
 
@@ -1804,19 +1848,29 @@ export class CircularTimerView extends ItemView {
             new Notice(`Task moved to "${progressTitle}"`);
             // Wait for reload to complete, then scroll to the column
             setTimeout(() => {
+              // Double-check that tasks container is populated
+              if (!this.tasksContainer || this.tasksContainer.children.length === 0) {
+                console.log('[AUTO-MOVE] Tasks container not ready yet, retrying...');
+                setTimeout(() => {
+                  this.handlePostMoveActions(taskText, 'progress');
+                }, 300);
+                return;
+              }
+              
               const newProgressColumns = this.findColumnsByType('progress');
               console.log('[AUTO-MOVE] Found progress columns after reload:', newProgressColumns.length);
               
               if (newProgressColumns.length > 0) {
-                // Scroll to the progress column
-                this.scrollToColumn(newProgressColumns[0].element);
+                // Scroll to the FIRST progress column (not the Phase Progress one if both exist)
+                const targetColumn = newProgressColumns.find(c => c.title.includes('In Progress')) || newProgressColumns[0];
+                this.scrollToColumn(targetColumn.element);
                 
                 // Find and select the task by its text content in the new column
                 setTimeout(() => {
-                  const tasksInProgress = newProgressColumns[0].element.querySelectorAll('.pomodoro-task-item');
-                  console.log('[AUTO-MOVE] Looking for task in progress column, found', tasksInProgress.length, 'tasks');
+                  const tasksInColumn = targetColumn.element.querySelectorAll('.pomodoro-task-item');
+                  console.log('[AUTO-MOVE] Looking for task in', targetColumn.title, ', found', tasksInColumn.length, 'tasks');
                   
-                  tasksInProgress.forEach(task => {
+                  tasksInColumn.forEach(task => {
                     const taskTextEl = task.querySelector('.task-text');
                     if (taskTextEl && taskTextEl.textContent === taskText) {
                       console.log('[AUTO-MOVE] Found moved task, selecting it');
@@ -1827,9 +1881,9 @@ export class CircularTimerView extends ItemView {
                       }
                     }
                   });
-                }, 100);
+                }, 150);
               }
-            }, 250);
+            }, 400);
             // Return early as the task will be reloaded
             return;
           }
