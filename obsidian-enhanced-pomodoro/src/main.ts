@@ -263,6 +263,13 @@ export default class EnhancedPomodoro extends Plugin {
     }, 0);
   }
 
+  refreshSoundsPreview(containerEl: HTMLElement) {
+    // Rebuild the sound preview section
+    // This is called when the refresh button is clicked
+    // For now, just show a message that settings are live-updated
+    new Notice('Sound previews are automatically updated! Just click Test after changing the dropdown.');
+  }
+
   private updateKanbanList(container: HTMLElement, files: TFile[], searchInput: HTMLInputElement): void {
     const listContainer = container.querySelector('.kanban-list') || container.createDiv({ cls: 'kanban-list' });
     listContainer.empty();
@@ -396,6 +403,10 @@ export default class EnhancedPomodoro extends Plugin {
   
   async loadSettings() {
     try {
+
+      // Set up settings tab
+      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
+
       // Load settings and merge with defaults
       const loadedSettings = await this.loadData();
       this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
@@ -1781,15 +1792,29 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Break Sounds')
       .setHeading();
+    
+    // Add refresh button
+    new Setting(containerEl).addButton(button => {
+      button
+        .setIcon('refresh-sp')
+        .setTooltip('Refresh SoundsPreview')
+        .onClick(() => this.plugin.refreshSoundsPreview(kanbanBoardSetting.controlEl));
+    });
 
 
     new Setting(containerEl)
-      .setName('Quick Break Sound')
-      .setDesc('Three quick beeps at 432Hz')
+      .setName('Quick Break Sound Preview')
+      .setDesc('Test the currently selected quick break sound')
       .addButton(button => button
         .setButtonText('Test')
         .onClick(() => {
-          this.plugin.playSound('quickbreak');
+          // Play the sound selected in the dropdown above
+          const selectedSound = this.plugin.settings.quickBreakSound;
+          if (selectedSound !== 'none') {
+            this.plugin.playSound(selectedSound);
+          } else {
+            new Notice('Quick break sound is set to "None"');
+          }
         })
       );
       
