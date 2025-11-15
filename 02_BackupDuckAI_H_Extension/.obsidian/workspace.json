@@ -82,9 +82,25 @@
               "icon": "lucide-trello",
               "title": "_Implementation_Plan_Kanban"
             }
+          },
+          {
+            "id": "317926e26c72ee01",
+            "type": "leaf",
+            "state": {
+              "type": "kanban",
+              "state": {
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": []
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "_Implementation_Plan_Kanban"
+            }
           }
         ],
-        "currentTab": 4
+        "currentTab": 5
       }
     ],
     "direction": "vertical"
@@ -223,19 +239,9 @@
               "icon": "lucide-list",
               "title": "Outline of _Implementation_Plan_Kanban"
             }
-          },
-          {
-            "id": "2638ae2e3345f74d",
-            "type": "leaf",
-            "state": {
-              "type": "circular-timer-view",
-              "state": {},
-              "icon": "timer",
-              "title": "Pomodoro Timer"
-            }
           }
         ],
-        "currentTab": 4
+        "currentTab": 3
       }
     ],
     "direction": "horizontal",
@@ -255,7 +261,7 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "2638ae2e3345f74d",
+  "active": "72aca8a02d21f9b5",
   "lastOpenFiles": [
     "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",

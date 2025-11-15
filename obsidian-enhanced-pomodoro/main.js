@@ -1812,7 +1812,6 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   }
   async loadSettings() {
     try {
-      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
       const loadedSettings = await this.loadData();
       this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
       if (!this.settings.schedules || this.settings.schedules.length === 0) {

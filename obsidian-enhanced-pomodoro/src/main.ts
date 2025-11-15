@@ -410,10 +410,6 @@ export default class EnhancedPomodoro extends Plugin {
   
   async loadSettings() {
     try {
-
-      // Set up settings tab
-      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
-
       // Load settings and merge with defaults
       const loadedSettings = await this.loadData();
       this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
