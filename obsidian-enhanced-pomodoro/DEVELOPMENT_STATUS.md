@@ -1,6 +1,11 @@
 # Enhanced Pomodoro Timer - Development Status
 
 ## 🎯 Latest Update (Nov 18, 2025 - Session 11)
+**Critical Bug Fixes:**
+- ✅ **Fixed Infinite Timer Loop** - Tasks with "- 1:01" pattern now handled correctly
+- ✅ **Fixed Kanban Dropdown Empty** - Added delay for metadata cache to load
+- ✅ **Extended Timer Pattern Detection** - Now matches with/without emoji
+
 **Major Kanban Integration Enhancements:**
 - ✅ **Fixed Critical Auto-Move Bugs** - Tasks now move correctly to proper columns
 - ✅ **Column Preference Logic** - Prioritizes "🚧 In Progress" over "Phase Progress"

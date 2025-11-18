@@ -1,36 +1,4 @@
 {
-  "currentScheduleId": "default",
-  "schedules": [
-    {
-      "id": "default",
-      "name": "Default Schedule",
-      "workDuration": 25,
-      "shortBreakDuration": 5,
-      "longBreakDuration": 15,
-      "autoStartNext": true,
-      "enableQuickBreak": true,
-      "quickBreakDuration": 5,
-      "quickBreakSound": "default",
-      "isDefault": true
-    }
-  ],
-  "workDuration": 25,
-  "shortBreakDuration": 5,
-  "longBreakDuration": 15,
-  "kanbanIntegration": true,
-  "autoStartNext": true,
-  "debugMode": false,
-  "logFile": "Pomodoro Log.md",
-  "kanbanBoardPath": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-  "currentTask": "task-Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md-130",
-  "enableQuickBreak": true,
-  "quickBreakDuration": 5,
-  "quickBreakSound": "default",
-  "sessionsCompletedCount": 0,
-  "autoMoveToProgress": true,
-  "autoMoveToDone": true,
-  "restrictToProgressTasks": false,
-  "updateTaskTimerInFile": true,
   "kanbanFileCache": {
     "pomodoro-debug-log.md": false,
     "Untitled.md": false,

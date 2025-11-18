@@ -1085,10 +1085,22 @@ export class CircularTimerView extends ItemView {
 
   private lastKanbanUpdateTime = 0;
   private kanbanUpdateDebounceDelay = 5000; // Update Kanban file every 5 seconds max
+  private lastUpdateTimerValue: Map<string, string> = new Map(); // Track last updated timer value per task
   
   private async updateTaskInKanbanFile(taskId: string, timeString: string) {
     // Only update if feature is enabled
     if (!this.plugin.settings.updateTaskTimerInFile) return;
+    
+    // Don't update if timer is 0:00 (no time tracked)
+    if (!timeString || timeString === '0:00') {
+      return;
+    }
+    
+    // Check if the timer value has actually changed
+    const lastValue = this.lastUpdateTimerValue.get(taskId);
+    if (lastValue === timeString) {
+      return; // No change, don't update
+    }
     
     // Debounce to avoid too frequent file updates
     const now = Date.now();
@@ -1159,6 +1171,7 @@ export class CircularTimerView extends ItemView {
       if (updated) {
         await this.app.vault.modify(file, lines.join('\n'));
         this.lastKanbanUpdateTime = now;
+        this.lastUpdateTimerValue.set(taskId, timeString); // Remember this value
         console.log('[KANBAN UPDATE] Task timer updated in file:', originalText, '→', timeString);
       }
     } catch (error) {
@@ -1387,12 +1400,8 @@ export class CircularTimerView extends ItemView {
       });
     }
   
-    // Also load when the metadata cache changes
-    if (this.app.metadataCache) {
-      this.registerEvent(this.app.metadataCache.on('changed', async () => {
-        await this.loadKanbanBoards();
-      }));
-    }
+    // Remove metadata cache listener - it causes infinite loops with timer updates
+    // The refresh button is sufficient for manual reloads
   }
 
   private async loadKanbanBoards(): Promise<void> {
@@ -1911,9 +1920,13 @@ export class CircularTimerView extends ItemView {
         const seconds = Math.floor(prevTime % 60);
         const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         this.lastKanbanUpdateTime = 0; // Force update
+        this.lastUpdateTimerValue.delete(this.activeTaskId); // Clear cached value to force update
         await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
       }
     }
+    
+    // Clear cached timer value for the new task to ensure it gets updated
+    this.lastUpdateTimerValue.delete(taskId);
     
     // Check if task is completed
     const isCompleted = taskElement.classList.contains('task-completed');

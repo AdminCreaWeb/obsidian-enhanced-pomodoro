@@ -139,7 +139,7 @@ status: In Progress
 - [ ] Fix authentication bug
 - [ ] Update dependencies
 - [ ] Refactor database queries
-- [ ] Implement user authentication system - 1:01
+- [ ] Implement user authentication system - 🍎 0:12
 
 
 ## ✅ Done

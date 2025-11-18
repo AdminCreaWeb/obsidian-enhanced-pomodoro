@@ -49,6 +49,8 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.animationFrameId = null;
     this.lastKanbanUpdateTime = 0;
     this.kanbanUpdateDebounceDelay = 5e3;
+    // Update Kanban file every 5 seconds max
+    this.lastUpdateTimerValue = /* @__PURE__ */ new Map();
     this.currentTaskElement = null;
     this.taskTimers = /* @__PURE__ */ new Map();
     // Store accumulated time for each task
@@ -822,9 +824,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       return false;
     }
   }
-  // Update Kanban file every 5 seconds max
+  // Track last updated timer value per task
   async updateTaskInKanbanFile(taskId, timeString) {
     if (!this.plugin.settings.updateTaskTimerInFile) return;
+    if (!timeString || timeString === "0:00") {
+      return;
+    }
+    const lastValue = this.lastUpdateTimerValue.get(taskId);
+    if (lastValue === timeString) {
+      return;
+    }
     const now = Date.now();
     if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
       return;
@@ -865,6 +874,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       if (updated) {
         await this.app.vault.modify(file, lines.join("\n"));
         this.lastKanbanUpdateTime = now;
+        this.lastUpdateTimerValue.set(taskId, timeString);
         console.log("[KANBAN UPDATE] Task timer updated in file:", originalText, "\u2192", timeString);
       }
     } catch (error) {
@@ -1032,11 +1042,6 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           this.plugin.refreshKanbanButtons(true);
         }
       });
-    }
-    if (this.app.metadataCache) {
-      this.registerEvent(this.app.metadataCache.on("changed", async () => {
-        await this.loadKanbanBoards();
-      }));
     }
   }
   async loadKanbanBoards() {
@@ -1404,9 +1409,11 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         const seconds = Math.floor(prevTime % 60);
         const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
         this.lastKanbanUpdateTime = 0;
+        this.lastUpdateTimerValue.delete(this.activeTaskId);
         await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
       }
     }
+    this.lastUpdateTimerValue.delete(taskId);
     const isCompleted = taskElement.classList.contains("task-completed");
     const checkbox = taskElement.querySelector(".task-checkbox");
     if (isCompleted || checkbox && checkbox.checked) {
