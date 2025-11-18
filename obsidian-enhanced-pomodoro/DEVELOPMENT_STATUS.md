@@ -1,6 +1,16 @@
 # Enhanced Pomodoro Timer - Development Status
 
-## 🎯 Latest Update (Nov 12, 2025 - 10:40 AM)
+## 🎯 Latest Update (Nov 18, 2025 - Session 11)
+**Major Kanban Integration Enhancements:**
+- ✅ **Fixed Critical Auto-Move Bugs** - Tasks now move correctly to proper columns
+- ✅ **Column Preference Logic** - Prioritizes "🚧 In Progress" over "Phase Progress"
+- ✅ **Done Column Detection** - Handles variations like "✅ Done - Phase 1"
+- ✅ **Timer Display in Kanban** - Shows `Task Name - 🍎 1:23` directly in markdown
+- ✅ **Settings Panel Fix** - Removed duplicate settings registration
+- ✅ **Improved UI Updates** - Better refresh timing after task moves
+
+## 🎯 Previous Update (Nov 12, 2025)
+**Current Session Number**: 10
 **Critical fixes and new features added:**
 - ✅ **Kanban file remembrance** - Fixed startup restoration with double-check mechanism
 - ✅ **Auto-start setting** - Now properly updates current schedule when toggled
