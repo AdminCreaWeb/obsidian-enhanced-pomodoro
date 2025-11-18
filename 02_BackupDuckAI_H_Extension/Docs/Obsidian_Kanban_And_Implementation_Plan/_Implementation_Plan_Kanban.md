@@ -5,9 +5,7 @@ status: In Progress
 
 ## 📝 Backlog
 
-- [ ] Plan key derivation (PBKDF2) #encryption
 - [ ] Document file format (.encrypted.md) #encryption
-- [ ] Research `browser.alarms` API #scheduling
 - [ ] Design folder settings UI #folders [🍅:: 1] ^h9cp
 - [ ] Design schedule types (daily, weekly, monthly) #scheduling
 - [ ] Plan multiple schedule support #scheduling
@@ -53,15 +51,6 @@ status: In Progress
 
 ## 🚧 In Progress
 
-
-
-## ✅ Done - Phase 1 (Code)
-
-- [x] Fixed "Select All" button behavior (no auto-select) #phase1 #ux
-- [x] Added warning when no conversations selected #phase1 #ux
-- [x] Smart button text toggle (Select All ↔ Deselect All) #phase1 #ux
-- [x] Fixed Full Backup index mismatch (rebuilds items array) #phase1 #bugfix
-- [x] Fixed Backup Status to show most recent backups (not oldest) #phase1 #bugfix ^qjq7
 
 
 ## 🔮 Future - Pro Features
@@ -136,6 +125,9 @@ status: In Progress
 
 - [ ] Phase 1 (Testing): 🟡 60% (code done, testing pending)
 - [ ] Phase 2 (Planning): 🔴 0% (not started)
+- [x] Phase 3 (Foundation): 🔴 0% (not started)
+- [x] Phase 4 (Pro Features): 🔴 0% (not started)
+- [x] Phase 5 (Release): 🔴 0% (not started)
 
 
 ## Tags Legend
@@ -144,8 +136,6 @@ status: In Progress
 
 ## Notes
 
-- [x] Phase 4 (Pro Features): 🔴 0% (not started)
-- [x] Phase 5 (Release): 🔴 0% (not started)
 - [ ] `#phase1` = Current phase (testing)
 - [ ] `#phase2` = Planning phase
 - [ ] `#phase3` = Foundation building
@@ -175,13 +165,23 @@ status: In Progress
 - [ ] Design decryption tool page #encryption
 - [ ] Load extension in Brave #testing #phase1
 - [ ] Load conversations from duck.ai #testing #phase1
-- [x] Phase 3 (Foundation): 🔴 0% (not started)
+
+
+## ✅ Done - Phase 1 (Code)
+
+- [x] Fixed "Select All" button behavior (no auto-select) #phase1 #ux
+- [x] Added warning when no conversations selected #phase1 #ux
+- [x] Smart button text toggle (Select All ↔ Deselect All) #phase1 #ux
+- [x] Fixed Full Backup index mismatch (rebuilds items array) #phase1 #bugfix
+- [x] Fixed Backup Status to show most recent backups (not oldest) #phase1 #bugfix ^qjq7
+- [x] Plan key derivation (PBKDF2) #encryption
+- [x] Research `browser.alarms` API #scheduling
 
 
 
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board"}
+{"kanban-plugin":"board","list-collapse":[null]}
 ```
 %%

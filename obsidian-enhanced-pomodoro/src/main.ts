@@ -104,6 +104,8 @@ interface EnhancedPomodoroSettings {
   autoMoveToProgress: boolean;
   autoMoveToDone: boolean;
   restrictToProgressTasks: boolean;
+  // Update task timer in Kanban file
+  updateTaskTimerInFile: boolean;
 }
 
 const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
@@ -139,7 +141,8 @@ const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
   sessionsCompletedCount: 0,
   autoMoveToProgress: true,
   autoMoveToDone: true,
-  restrictToProgressTasks: false
+  restrictToProgressTasks: false,
+  updateTaskTimerInFile: true
 };
 
 export default class EnhancedPomodoro extends Plugin {
@@ -1762,6 +1765,17 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.restrictToProgressTasks)
         .onChange(async (value) => {
           this.plugin.settings.restrictToProgressTasks = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Update timer in Kanban file')
+      .setDesc('Show task timer (🍎 1:23) directly in Kanban file text')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.updateTaskTimerInFile)
+        .onChange(async (value) => {
+          this.plugin.settings.updateTaskTimerInFile = value;
           await this.plugin.saveSettings();
         })
       );

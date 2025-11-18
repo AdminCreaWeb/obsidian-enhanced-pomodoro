@@ -89,14 +89,14 @@
             "state": {
               "type": "kanban",
               "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
                 "kanbanViewState": {
                   "kanban-plugin": "board",
                   "list-collapse": []
                 }
               },
               "icon": "lucide-trello",
-              "title": "_Implementation_Plan_Kanban"
+              "title": "_Performance_Test_Kanban"
             }
           }
         ],
@@ -239,13 +239,23 @@
               "icon": "lucide-list",
               "title": "Outline of _Implementation_Plan_Kanban"
             }
+          },
+          {
+            "id": "481ff7fb775daf09",
+            "type": "leaf",
+            "state": {
+              "type": "circular-timer-view",
+              "state": {},
+              "icon": "timer",
+              "title": "Pomodoro Timer"
+            }
           }
         ],
-        "currentTab": 3
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
-    "width": 423.5
+    "width": 513.5
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -261,11 +271,11 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "72aca8a02d21f9b5",
+  "active": "317926e26c72ee01",
   "lastOpenFiles": [
     "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
-    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",
     "Pomodoro Task Timers.md",
     "Pomodoro Log.md",
     "Spline integration.md",

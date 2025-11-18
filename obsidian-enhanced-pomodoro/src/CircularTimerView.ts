@@ -1078,6 +1078,82 @@ export class CircularTimerView extends ItemView {
     }
   }
 
+  private lastKanbanUpdateTime = 0;
+  private kanbanUpdateDebounceDelay = 5000; // Update Kanban file every 5 seconds max
+  
+  private async updateTaskInKanbanFile(taskId: string, timeString: string) {
+    // Only update if feature is enabled
+    if (!this.plugin.settings.updateTaskTimerInFile) return;
+    
+    // Debounce to avoid too frequent file updates
+    const now = Date.now();
+    if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
+      return;
+    }
+    
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return;
+      
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) return;
+      
+      // Get the task element to find its original text
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) return;
+      
+      const taskTextElement = taskElement.querySelector('.task-text');
+      if (!taskTextElement) return;
+      
+      // Get the original task text (without any timer info)
+      let originalText = taskTextElement.textContent || '';
+      
+      // Remove existing timer info if present (matches patterns like " - 🍎 1:23" or " [1:23]")
+      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '').trim();
+      
+      const content = await this.app.vault.read(file);
+      const lines = content.split('\n');
+      
+      let updated = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Check if this line contains the task (without timer info)
+        if ((line.includes('- [ ]') || line.includes('- [x]')) && line.includes(originalText)) {
+          // Remove old timer info from the line (all patterns)
+          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '');
+          
+          // Add new timer info
+          if (timeString && timeString !== '0:00') {
+            // Insert timer info before any tags (which start with #)
+            const tagIndex = cleanLine.search(/#\w+/);
+            if (tagIndex !== -1) {
+              // Has tags - insert timer before them
+              lines[i] = cleanLine.substring(0, tagIndex).trimEnd() + ` - 🍎 ${timeString} ` + cleanLine.substring(tagIndex);
+            } else {
+              // No tags - append timer to end
+              lines[i] = cleanLine.trimEnd() + ` - 🍎 ${timeString}`;
+            }
+          } else {
+            lines[i] = cleanLine;
+          }
+          
+          updated = true;
+          console.log('[KANBAN UPDATE] Updated line:', lines[i]);
+          break;
+        }
+      }
+      
+      if (updated) {
+        await this.app.vault.modify(file, lines.join('\n'));
+        this.lastKanbanUpdateTime = now;
+        console.log('[KANBAN UPDATE] Task timer updated in file:', originalText, '→', timeString);
+      }
+    } catch (error) {
+      console.error('[KANBAN UPDATE] Error updating task in file:', error);
+    }
+  }
+  
   private handlePostMoveActions(taskText: string, columnType: 'progress' | 'done') {
     const columns = this.findColumnsByType(columnType);
     if (columns.length > 0) {
@@ -1722,7 +1798,10 @@ export class CircularTimerView extends ItemView {
             }
           });
           
-          taskContent.createSpan({ text: task.text, cls: 'task-text' });
+          // Remove timer info from displayed text to avoid duplication
+          let displayText = task.text;
+          displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '');
+          taskContent.createSpan({ text: displayText, cls: 'task-text' });
           const taskTimer = taskContent.createSpan({ text: '', cls: 'task-timer' });
           
           // Restore previous timer if exists
@@ -1803,6 +1882,18 @@ export class CircularTimerView extends ItemView {
     const taskText = taskElement.querySelector('.task-text')?.textContent || 'Unknown Task';
     const kanbanFile = this.plugin.settings.kanbanBoardPath || 'No Kanban Selected';
     const kanbanFileName = kanbanFile.split('/').pop()?.replace('.md', '') || 'Unknown';
+    
+    // Force update the previous task's timer in Kanban file before switching
+    if (this.activeTaskId && this.activeTaskId !== taskId) {
+      const prevTime = this.taskTimers.get(this.activeTaskId) || 0;
+      if (prevTime > 0) {
+        const minutes = Math.floor(prevTime / 60);
+        const seconds = Math.floor(prevTime % 60);
+        const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        this.lastKanbanUpdateTime = 0; // Force update
+        await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+      }
+    }
     
     // Check if task is completed
     const isCompleted = taskElement.classList.contains('task-completed');
@@ -1961,7 +2052,11 @@ export class CircularTimerView extends ItemView {
     
     const minutes = Math.floor(totalTime / 60);
     const seconds = Math.floor(totalTime % 60);
-    timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, '0')}]`);
+    const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    timerElement.setText(` [${timeString}]`);
+    
+    // Also update the task in the Kanban file if enabled
+    this.updateTaskInKanbanFile(this.activeTaskId, timeString);
   }
   
   // Call this method from the animation loop to update active task timer

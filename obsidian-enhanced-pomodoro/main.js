@@ -47,6 +47,8 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.dragTarget = null;
     this.snapIndicators = [];
     this.animationFrameId = null;
+    this.lastKanbanUpdateTime = 0;
+    this.kanbanUpdateDebounceDelay = 5e3;
     this.currentTaskElement = null;
     this.taskTimers = /* @__PURE__ */ new Map();
     // Store accumulated time for each task
@@ -817,6 +819,55 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       return false;
     }
   }
+  // Update Kanban file every 5 seconds max
+  async updateTaskInKanbanFile(taskId, timeString) {
+    if (!this.plugin.settings.updateTaskTimerInFile) return;
+    const now = Date.now();
+    if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
+      return;
+    }
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return;
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian.TFile)) return;
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) return;
+      const taskTextElement = taskElement.querySelector(".task-text");
+      if (!taskTextElement) return;
+      let originalText = taskTextElement.textContent || "";
+      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "").trim();
+      const content = await this.app.vault.read(file);
+      const lines = content.split("\n");
+      let updated = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if ((line.includes("- [ ]") || line.includes("- [x]")) && line.includes(originalText)) {
+          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
+          if (timeString && timeString !== "0:00") {
+            const tagIndex = cleanLine.search(/#\w+/);
+            if (tagIndex !== -1) {
+              lines[i] = cleanLine.substring(0, tagIndex).trimEnd() + ` - \u{1F34E} ${timeString} ` + cleanLine.substring(tagIndex);
+            } else {
+              lines[i] = cleanLine.trimEnd() + ` - \u{1F34E} ${timeString}`;
+            }
+          } else {
+            lines[i] = cleanLine;
+          }
+          updated = true;
+          console.log("[KANBAN UPDATE] Updated line:", lines[i]);
+          break;
+        }
+      }
+      if (updated) {
+        await this.app.vault.modify(file, lines.join("\n"));
+        this.lastKanbanUpdateTime = now;
+        console.log("[KANBAN UPDATE] Task timer updated in file:", originalText, "\u2192", timeString);
+      }
+    } catch (error) {
+      console.error("[KANBAN UPDATE] Error updating task in file:", error);
+    }
+  }
   handlePostMoveActions(taskText, columnType) {
     const columns = this.findColumnsByType(columnType);
     if (columns.length > 0) {
@@ -1274,7 +1325,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
               }
             }
           });
-          taskContent.createSpan({ text: task.text, cls: "task-text" });
+          let displayText = task.text;
+          displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
+          taskContent.createSpan({ text: displayText, cls: "task-text" });
           const taskTimer = taskContent.createSpan({ text: "", cls: "task-timer" });
           const previousTime = this.taskTimers.get(taskId) || 0;
           if (previousTime > 0) {
@@ -1337,6 +1390,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     const taskText = taskElement.querySelector(".task-text")?.textContent || "Unknown Task";
     const kanbanFile = this.plugin.settings.kanbanBoardPath || "No Kanban Selected";
     const kanbanFileName = kanbanFile.split("/").pop()?.replace(".md", "") || "Unknown";
+    if (this.activeTaskId && this.activeTaskId !== taskId) {
+      const prevTime = this.taskTimers.get(this.activeTaskId) || 0;
+      if (prevTime > 0) {
+        const minutes = Math.floor(prevTime / 60);
+        const seconds = Math.floor(prevTime % 60);
+        const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+        this.lastKanbanUpdateTime = 0;
+        await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+      }
+    }
     const isCompleted = taskElement.classList.contains("task-completed");
     const checkbox = taskElement.querySelector(".task-checkbox");
     if (isCompleted || checkbox && checkbox.checked) {
@@ -1449,7 +1512,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     }
     const minutes = Math.floor(totalTime / 60);
     const seconds = Math.floor(totalTime % 60);
-    timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, "0")}]`);
+    const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    timerElement.setText(` [${timeString}]`);
+    this.updateTaskInKanbanFile(this.activeTaskId, timeString);
   }
   // Call this method from the animation loop to update active task timer
   updateActiveTaskTimer() {
@@ -1608,7 +1673,8 @@ var DEFAULT_SETTINGS = {
   sessionsCompletedCount: 0,
   autoMoveToProgress: true,
   autoMoveToDone: true,
-  restrictToProgressTasks: false
+  restrictToProgressTasks: false,
+  updateTaskTimerInFile: true
 };
 var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   constructor() {
@@ -2767,6 +2833,12 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     new import_obsidian2.Setting(containerEl).setName("Restrict to Progress tasks only").setDesc('Only allow tasks in "In Progress" column to start/continue timer').addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.restrictToProgressTasks).onChange(async (value) => {
         this.plugin.settings.restrictToProgressTasks = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Update timer in Kanban file").setDesc("Show task timer (\u{1F34E} 1:23) directly in Kanban file text").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.updateTaskTimerInFile).onChange(async (value) => {
+        this.plugin.settings.updateTaskTimerInFile = value;
         await this.plugin.saveSettings();
       })
     );
