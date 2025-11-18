@@ -1360,6 +1360,16 @@ export class CircularTimerView extends ItemView {
           const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
           const newTime = currentTime + elapsed;
           this.taskTimers.set(this.activeTaskId, newTime);
+          
+          // Also save by task text for persistence
+          const prevTaskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+          if (prevTaskElement) {
+            const prevTaskText = prevTaskElement.querySelector('.task-text')?.textContent || '';
+            if (prevTaskText) {
+              this.taskTimersByText.set(prevTaskText, newTime);
+            }
+          }
+          
           console.log('  Saved Current Task Time Before Switch:', Math.floor(newTime / 60) + ':' + String(Math.floor(newTime % 60)).padStart(2, '0'));
           this.lastUpdateTime = Date.now();
           
@@ -1523,6 +1533,7 @@ export class CircularTimerView extends ItemView {
 
   private currentTaskElement: HTMLElement | null = null;
   private taskTimers: Map<string, number> = new Map(); // Store accumulated time for each task
+  private taskTimersByText: Map<string, number> = new Map(); // Store timers by task text for persistence
   private activeTaskId: string | null = null;
   private lastUpdateTime: number = Date.now();
 
@@ -1833,8 +1844,17 @@ export class CircularTimerView extends ItemView {
           taskContent.createSpan({ text: displayText.trim(), cls: 'task-text' });
           const taskTimer = taskContent.createSpan({ text: '', cls: 'task-timer' });
           
-          // Restore previous timer if exists
-          const previousTime = this.taskTimers.get(taskId) || 0;
+          // Restore previous timer if exists - check both by ID and by text
+          let previousTime = this.taskTimers.get(taskId) || 0;
+          if (previousTime === 0) {
+            // Try to restore by task text
+            previousTime = this.taskTimersByText.get(task.text) || 0;
+            if (previousTime > 0) {
+              // Sync both maps
+              this.taskTimers.set(taskId, previousTime);
+            }
+          }
+          
           if (previousTime > 0) {
             const minutes = Math.floor(previousTime / 60);
             const seconds = Math.floor(previousTime % 60);
@@ -2030,6 +2050,16 @@ export class CircularTimerView extends ItemView {
       const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
       const newTime = currentTime + elapsed;
       this.taskTimers.set(this.activeTaskId, newTime);
+      
+      // Also save by task text for persistence
+      const prevTaskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (prevTaskElement) {
+        const prevTaskText = prevTaskElement.querySelector('.task-text')?.textContent || '';
+        if (prevTaskText) {
+          this.taskTimersByText.set(prevTaskText, newTime);
+        }
+      }
+      
       console.log('  Saved Previous Task Time:', Math.floor(newTime / 60) + ':' + String(Math.floor(newTime % 60)).padStart(2, '0'));
       
       // Extract kanban file name from the previous task ID (format: task-{boardPath}-{index})
@@ -2047,12 +2077,19 @@ export class CircularTimerView extends ItemView {
     const taskList = this.tasksContainer?.querySelector('.pomodoro-task-list');
     if (taskList) {
       taskList.querySelectorAll('.pomodoro-task-active').forEach(el => {
-        el.removeClass('pomodoro-task-active');
+        el.classList.remove('pomodoro-task-active');
+      });
+    }
+    
+    // Also remove active class from any tasks in other columns
+    if (this.tasksContainer) {
+      this.tasksContainer.querySelectorAll('.pomodoro-task-active').forEach(el => {
+        el.classList.remove('pomodoro-task-active');
       });
     }
     
     // Add active class to clicked task
-    taskElement.addClass('pomodoro-task-active');
+    taskElement.classList.add('pomodoro-task-active');
     
     // Set new active task
     this.currentTaskElement = taskElement;
@@ -2102,19 +2139,25 @@ export class CircularTimerView extends ItemView {
     }
   }
   
-  // Call when timer is paused to save current task time
-  public pauseTaskTimer() {
+  // Call this from outside to save current task time
+  public saveCurrentTaskTime() {
     if (this.activeTaskId && this.plugin.currentMode === 'work') {
       const elapsed = (Date.now() - this.lastUpdateTime) / 1000;
       const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
-      this.taskTimers.set(this.activeTaskId, currentTime + elapsed);
+      const newTime = currentTime + elapsed;
+      this.taskTimers.set(this.activeTaskId, newTime);
+      
+      // Also save by task text for persistence
+      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (taskElement) {
+        const taskText = taskElement.querySelector('.task-text')?.textContent || '';
+        if (taskText) {
+          this.taskTimersByText.set(taskText, newTime);
+        }
+      }
+      
       this.lastUpdateTime = Date.now();
     }
-  }
-  
-  // Call when timer resumes to reset the last update time
-  public resumeTaskTimer() {
-    this.lastUpdateTime = Date.now();
   }
   
   // Log task time to dedicated task timer log file
@@ -2156,7 +2199,7 @@ export class CircularTimerView extends ItemView {
       } else {
         // Create new file with header
         const header = `# Pomodoro Task Timers\n\nTask timing log organized by Kanban board.\n\n## ${kanbanFileName}\n`;
-        await vault.create(taskLogFile, header + logEntry);
+        await vault.adapter.write(taskLogFile, header + logEntry);
       }
     } catch (error) {
       console.error('Error logging task time:', error);

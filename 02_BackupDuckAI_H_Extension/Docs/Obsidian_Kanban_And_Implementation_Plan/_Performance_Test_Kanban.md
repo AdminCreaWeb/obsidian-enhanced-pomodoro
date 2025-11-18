@@ -1,11 +1,12 @@
 ---
+
 kanban-plugin: board
 status: In Progress
+
 ---
 
 ## 📋 Todo (100+ Tasks)
 
-- [ ] Create login page UI
 - [ ] Design registration form
 - [ ] Add password reset functionality
 - [ ] Implement OAuth integration (Google)
@@ -138,15 +139,16 @@ status: In Progress
 
 - [ ] Fix authentication bug
 - [ ] Update dependencies
-- [ ] Refactor database queries
-- [ ] Implement user authentication system - 🍎 0:12
+- [ ] Refactor database queries - 🍎 0:06
+- [x] Initial project setup - 🍎 0:16
+- [ ] Create login page UI - 🍎 1:16
 
 
 ## ✅ Done
 
-- [x] Initial project setup
 - [x] Configure development environment
 - [x] Set up version control
+- [x] Implement user authentication system - 🍎 0:14
 
 
 

@@ -1,7 +1,12 @@
 # Enhanced Pomodoro Timer - Development Status
 
 ## 🎯 Latest Update (Nov 18, 2025 - Session 11)
-**Critical Bug Fixes:**
+**Critical Bug Fixes - Round 2:**
+- ✅ **Fixed Metadata Cache Infinite Loop** - Removed listener causing repeated loadKanbanBoards()
+- ✅ **Fixed Timer 0:00 Spam** - Don't update file when timer is 0:00 or unchanged
+- ✅ **Improved Update Tracking** - Track last timer value per task to prevent duplicates
+
+**Critical Bug Fixes - Round 1:**
 - ✅ **Fixed Infinite Timer Loop** - Tasks with "- 1:01" pattern now handled correctly
 - ✅ **Fixed Kanban Dropdown Empty** - Added delay for metadata cache to load
 - ✅ **Extended Timer Pattern Detection** - Now matches with/without emoji

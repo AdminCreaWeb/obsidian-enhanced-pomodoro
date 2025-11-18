@@ -54,6 +54,8 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.currentTaskElement = null;
     this.taskTimers = /* @__PURE__ */ new Map();
     // Store accumulated time for each task
+    this.taskTimersByText = /* @__PURE__ */ new Map();
+    // Store timers by task text for persistence
     this.activeTaskId = null;
     this.lastUpdateTime = Date.now();
   }
@@ -1013,6 +1015,13 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
           const newTime = currentTime + elapsed;
           this.taskTimers.set(this.activeTaskId, newTime);
+          const prevTaskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+          if (prevTaskElement) {
+            const prevTaskText = prevTaskElement.querySelector(".task-text")?.textContent || "";
+            if (prevTaskText) {
+              this.taskTimersByText.set(prevTaskText, newTime);
+            }
+          }
           console.log("  Saved Current Task Time Before Switch:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
           this.lastUpdateTime = Date.now();
           const prevKanbanFileName = (this.plugin.settings.kanbanBoardPath || "").split("/").pop()?.replace(".md", "") || "Unknown";
@@ -1341,7 +1350,13 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
           taskContent.createSpan({ text: displayText.trim(), cls: "task-text" });
           const taskTimer = taskContent.createSpan({ text: "", cls: "task-timer" });
-          const previousTime = this.taskTimers.get(taskId) || 0;
+          let previousTime = this.taskTimers.get(taskId) || 0;
+          if (previousTime === 0) {
+            previousTime = this.taskTimersByText.get(task.text) || 0;
+            if (previousTime > 0) {
+              this.taskTimers.set(taskId, previousTime);
+            }
+          }
           if (previousTime > 0) {
             const minutes = Math.floor(previousTime / 60);
             const seconds = Math.floor(previousTime % 60);
@@ -1493,6 +1508,13 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
       const newTime = currentTime + elapsed;
       this.taskTimers.set(this.activeTaskId, newTime);
+      const prevTaskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (prevTaskElement) {
+        const prevTaskText = prevTaskElement.querySelector(".task-text")?.textContent || "";
+        if (prevTaskText) {
+          this.taskTimersByText.set(prevTaskText, newTime);
+        }
+      }
       console.log("  Saved Previous Task Time:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
       const prevTaskParts = this.activeTaskId.match(/^task-(.+)-(\d+)$/);
       const prevKanbanPath = prevTaskParts ? prevTaskParts[1] : "";
@@ -1503,10 +1525,15 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     const taskList = this.tasksContainer?.querySelector(".pomodoro-task-list");
     if (taskList) {
       taskList.querySelectorAll(".pomodoro-task-active").forEach((el) => {
-        el.removeClass("pomodoro-task-active");
+        el.classList.remove("pomodoro-task-active");
       });
     }
-    taskElement.addClass("pomodoro-task-active");
+    if (this.tasksContainer) {
+      this.tasksContainer.querySelectorAll(".pomodoro-task-active").forEach((el) => {
+        el.classList.remove("pomodoro-task-active");
+      });
+    }
+    taskElement.classList.add("pomodoro-task-active");
     this.currentTaskElement = taskElement;
     this.activeTaskId = taskId;
     this.lastUpdateTime = Date.now();
@@ -1538,18 +1565,22 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       this.updateTaskTimer(timerElement);
     }
   }
-  // Call when timer is paused to save current task time
-  pauseTaskTimer() {
+  // Call this from outside to save current task time
+  saveCurrentTaskTime() {
     if (this.activeTaskId && this.plugin.currentMode === "work") {
       const elapsed = (Date.now() - this.lastUpdateTime) / 1e3;
       const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
-      this.taskTimers.set(this.activeTaskId, currentTime + elapsed);
+      const newTime = currentTime + elapsed;
+      this.taskTimers.set(this.activeTaskId, newTime);
+      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (taskElement) {
+        const taskText = taskElement.querySelector(".task-text")?.textContent || "";
+        if (taskText) {
+          this.taskTimersByText.set(taskText, newTime);
+        }
+      }
       this.lastUpdateTime = Date.now();
     }
-  }
-  // Call when timer resumes to reset the last update time
-  resumeTaskTimer() {
-    this.lastUpdateTime = Date.now();
   }
   // Log task time to dedicated task timer log file
   async logTaskTime(taskId, totalSeconds, kanbanFileName) {
@@ -1583,7 +1614,7 @@ Task timing log organized by Kanban board.
 
 ## ${kanbanFileName}
 `;
-        await vault.create(taskLogFile, header + logEntry);
+        await vault.adapter.write(taskLogFile, header + logEntry);
       }
     } catch (error) {
       console.error("Error logging task time:", error);
