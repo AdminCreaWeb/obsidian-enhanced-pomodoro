@@ -1,6 +1,11 @@
 # Enhanced Pomodoro Timer - Development Status
 
 ## 🎯 Latest Update (Nov 18, 2025 - Session 11)
+**Critical Bug Fixes - Round 3:**
+- ✅ **Fixed Multiple Task Selection** - Proper DOM classList methods for active state
+- ✅ **Fixed Timer Persistence** - Track timers by both taskId and task text
+- ✅ **Improved Timer Recovery** - Timers persist when tasks move between columns
+
 **Critical Bug Fixes - Round 2:**
 - ✅ **Fixed Metadata Cache Infinite Loop** - Removed listener causing repeated loadKanbanBoards()
 - ✅ **Fixed Timer 0:00 Spam** - Don't update file when timer is 0:00 or unchanged

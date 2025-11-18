@@ -146,9 +146,23 @@
               "icon": "lucide-trello",
               "title": "_Performance_Test_Kanban"
             }
+          },
+          {
+            "id": "21b80e14dd527665",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Pomodoro Log.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Pomodoro Log"
+            }
           }
         ],
-        "currentTab": 8
+        "currentTab": 9
       }
     ],
     "direction": "vertical"
@@ -210,19 +224,8 @@
               "icon": "bar-chart-horizontal",
               "title": "Task progress bar"
             }
-          },
-          {
-            "id": "32fa28f7650b0677",
-            "type": "leaf",
-            "state": {
-              "type": "progress-tracker",
-              "state": {},
-              "icon": "bar-chart-horizontal",
-              "title": "Task progress bar"
-            }
           }
-        ],
-        "currentTab": 3
+        ]
       }
     ],
     "direction": "horizontal",
@@ -290,17 +293,17 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
+                "file": "Pomodoro Log.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of _Performance_Test_Kanban"
+              "title": "Outline of Pomodoro Log"
             }
           },
           {
-            "id": "f328ff910687a447",
+            "id": "3e3274cc2217ff5b",
             "type": "leaf",
             "state": {
               "type": "circular-timer-view",
@@ -330,15 +333,15 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "f328ff910687a447",
+  "active": "21b80e14dd527665",
   "lastOpenFiles": [
+    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
+    "Pomodoro Log.md",
+    "Pomodoro Task Timers.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",
-    "Pomodoro Task Timers.md",
-    "Pomodoro Log.md",
     "Spline integration.md",
-    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
     "pomodoro-debug-log.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan.md",
     "Untitled Kanban.md",

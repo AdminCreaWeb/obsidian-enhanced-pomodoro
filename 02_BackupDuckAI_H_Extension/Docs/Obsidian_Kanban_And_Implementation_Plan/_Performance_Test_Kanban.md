@@ -1,8 +1,6 @@
 ---
-
 kanban-plugin: board
 status: In Progress
-
 ---
 
 ## 📋 Todo (100+ Tasks)
@@ -140,7 +138,7 @@ status: In Progress
 - [ ] Fix authentication bug
 - [ ] Update dependencies
 - [ ] Refactor database queries - 🍎 0:06
-- [x] Initial project setup - 🍎 0:16
+- [x] Implement user authentication system - 🍎 3:01
 - [ ] Create login page UI - 🍎 1:16
 
 
@@ -148,7 +146,7 @@ status: In Progress
 
 - [x] Configure development environment
 - [x] Set up version control
-- [x] Implement user authentication system - 🍎 0:14
+- [x] Initial project setup - 🍎 0:16
 
 
 

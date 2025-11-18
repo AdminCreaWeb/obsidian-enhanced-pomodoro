@@ -1320,6 +1320,20 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           checkbox.addEventListener("change", async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass("task-completed", checkbox.checked);
+            if (checkbox.checked) {
+              const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
+              if (totalTime > 0) {
+                const kanbanFileName = boardPath.split("/").pop()?.replace(".md", "") || "Unknown";
+                await this.logTaskTime(taskId, totalTime, kanbanFileName);
+                const minutes = Math.floor(totalTime / 60);
+                const seconds = Math.floor(totalTime % 60);
+                const finalTimeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+                this.lastKanbanUpdateTime = 0;
+                this.lastUpdateTimerValue.delete(taskId);
+                await this.updateTaskInKanbanFile(taskId, finalTimeString);
+                console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+              }
+            }
             if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
               const currentGroupEl = taskItem.closest(".pomodoro-task-group");
               const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
@@ -1578,6 +1592,30 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         if (taskText) {
           this.taskTimersByText.set(taskText, newTime);
         }
+      }
+      this.lastUpdateTime = Date.now();
+    }
+  }
+  // Pause task timer (for quick breaks)
+  pauseTaskTimer() {
+    if (this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === "work") {
+      const elapsed = (Date.now() - this.lastUpdateTime) / 1e3;
+      const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
+      const newTime = currentTime + elapsed;
+      this.taskTimers.set(this.activeTaskId, newTime);
+      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (taskElement) {
+        const taskText = taskElement.querySelector(".task-text")?.textContent || "";
+        if (taskText) {
+          this.taskTimersByText.set(taskText, newTime);
+        }
+      }
+      console.log("[TASK TIMER] Paused with time:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
+      const timerElement = this.currentTaskElement?.querySelector(".task-timer");
+      if (timerElement) {
+        const minutes = Math.floor(newTime / 60);
+        const seconds = Math.floor(newTime % 60);
+        timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, "0")}]`);
       }
       this.lastUpdateTime = Date.now();
     }

@@ -1803,6 +1803,30 @@ export class CircularTimerView extends ItemView {
             task.completed = checkbox.checked;
             taskItem.toggleClass('task-completed', checkbox.checked);
             
+            // If task is being completed, log the total time
+            if (checkbox.checked) {
+              // Get the total time for this task
+              const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
+              
+              if (totalTime > 0) {
+                // Log to the task timer file
+                const kanbanFileName = boardPath.split('/').pop()?.replace('.md', '') || 'Unknown';
+                await this.logTaskTime(taskId, totalTime, kanbanFileName);
+                
+                // Update the task in the Kanban file with final time
+                const minutes = Math.floor(totalTime / 60);
+                const seconds = Math.floor(totalTime % 60);
+                const finalTimeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                // Force update the task in Kanban file with final time
+                this.lastKanbanUpdateTime = 0; // Force update
+                this.lastUpdateTimerValue.delete(taskId); // Clear cached value
+                await this.updateTaskInKanbanFile(taskId, finalTimeString);
+                
+                console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+              }
+            }
+            
             // Auto-move to done column if enabled and checkbox is checked
             if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
               const currentGroupEl = taskItem.closest('.pomodoro-task-group');
@@ -2156,6 +2180,39 @@ export class CircularTimerView extends ItemView {
         }
       }
       
+      this.lastUpdateTime = Date.now();
+    }
+  }
+  
+  // Pause task timer (for quick breaks)
+  public pauseTaskTimer() {
+    if (this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === 'work') {
+      // Save accumulated time
+      const elapsed = (Date.now() - this.lastUpdateTime) / 1000;
+      const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
+      const newTime = currentTime + elapsed;
+      this.taskTimers.set(this.activeTaskId, newTime);
+      
+      // Save by task text too
+      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+      if (taskElement) {
+        const taskText = taskElement.querySelector('.task-text')?.textContent || '';
+        if (taskText) {
+          this.taskTimersByText.set(taskText, newTime);
+        }
+      }
+      
+      console.log('[TASK TIMER] Paused with time:', Math.floor(newTime / 60) + ':' + String(Math.floor(newTime % 60)).padStart(2, '0'));
+      
+      // Update display immediately
+      const timerElement = this.currentTaskElement?.querySelector('.task-timer') as HTMLElement;
+      if (timerElement) {
+        const minutes = Math.floor(newTime / 60);
+        const seconds = Math.floor(newTime % 60);
+        timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, '0')}]`);
+      }
+      
+      // Reset update time (will be set again when timer resumes)
       this.lastUpdateTime = Date.now();
     }
   }
