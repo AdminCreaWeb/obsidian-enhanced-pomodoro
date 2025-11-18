@@ -30,6 +30,7 @@
   "autoMoveToProgress": true,
   "autoMoveToDone": true,
   "restrictToProgressTasks": false,
+  "updateTaskTimerInFile": true,
   "kanbanFileCache": {
     "pomodoro-debug-log.md": false,
     "Untitled.md": false,

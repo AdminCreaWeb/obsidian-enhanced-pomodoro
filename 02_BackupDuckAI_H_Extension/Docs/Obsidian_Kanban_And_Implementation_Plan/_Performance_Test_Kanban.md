@@ -1,8 +1,6 @@
 ---
-
 kanban-plugin: board
 status: In Progress
-
 ---
 
 ## 📋 Todo (100+ Tasks)

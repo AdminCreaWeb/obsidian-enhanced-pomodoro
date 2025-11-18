@@ -90,13 +90,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.initializeSvgElements();
     this.addStyles();
     this.animate();
-    if (this.plugin.settings.kanbanBoardPath) {
-      try {
-        await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-      } catch (error) {
-        console.error("Failed loading Kanban tasks:", error);
+    setTimeout(async () => {
+      await this.loadKanbanBoards();
+      if (this.plugin.settings.kanbanBoardPath) {
+        try {
+          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+        } catch (error) {
+          console.error("Failed loading Kanban tasks:", error);
+        }
       }
-    }
+    }, 500);
   }
   initializeSvgElements() {
     const svgNS = "http://www.w3.org/2000/svg";
@@ -836,14 +839,14 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       const taskTextElement = taskElement.querySelector(".task-text");
       if (!taskTextElement) return;
       let originalText = taskTextElement.textContent || "";
-      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "").trim();
+      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "").trim();
       const content = await this.app.vault.read(file);
       const lines = content.split("\n");
       let updated = false;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if ((line.includes("- [ ]") || line.includes("- [x]")) && line.includes(originalText)) {
-          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
+          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
           if (timeString && timeString !== "0:00") {
             const tagIndex = cleanLine.search(/#\w+/);
             if (tagIndex !== -1) {
@@ -1035,18 +1038,19 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         await this.loadKanbanBoards();
       }));
     }
-    await this.loadKanbanBoards();
   }
   async loadKanbanBoards() {
     if (!this.kanbanSelector) {
-      console.warn("Kanban selector not initialized");
+      console.warn("[KANBAN LOAD] Kanban selector not initialized");
       return;
     }
+    console.log("[KANBAN LOAD] Loading Kanban boards...");
     while (this.kanbanSelector.options.length > 1) {
       this.kanbanSelector.remove(1);
     }
     try {
       const files = this.app.vault.getMarkdownFiles();
+      console.log(`[KANBAN LOAD] Checking ${files.length} markdown files`);
       const kanbanFiles = [];
       const checkedFiles = /* @__PURE__ */ new Set();
       for (const file of files) {
@@ -1080,6 +1084,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           console.warn(`Error checking file ${file.path}:`, e);
         }
       }
+      console.log(`[KANBAN LOAD] Found ${kanbanFiles.length} Kanban files`);
       if (kanbanFiles.length === 0) {
         const option = this.kanbanSelector.createEl("option", {
           value: "",
@@ -1091,12 +1096,14 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       kanbanFiles.sort((a, b) => a.basename.localeCompare(b.basename));
       for (const file of kanbanFiles) {
         const displayName = file.basename.replace(/\.kanban$/, "");
+        console.log(`[KANBAN LOAD] Adding board: ${displayName} (${file.path})`);
         const option = this.kanbanSelector.createEl("option", {
           value: file.path,
           text: displayName
         });
         if (this.plugin.settings.kanbanBoardPath === file.path) {
           option.selected = true;
+          console.log(`[KANBAN LOAD] Selected board: ${displayName}`);
         }
       }
       if (this.plugin.settings.kanbanBoardPath) {
@@ -1326,8 +1333,8 @@ var CircularTimerView = class extends import_obsidian.ItemView {
             }
           });
           let displayText = task.text;
-          displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
-          taskContent.createSpan({ text: displayText, cls: "task-text" });
+          displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
+          taskContent.createSpan({ text: displayText.trim(), cls: "task-text" });
           const taskTimer = taskContent.createSpan({ text: "", cls: "task-timer" });
           const previousTime = this.taskTimers.get(taskId) || 0;
           if (previousTime > 0) {

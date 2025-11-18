@@ -88,14 +88,19 @@ export class CircularTimerView extends ItemView {
     // Start the animation loop
     this.animate();
     
-    // Load tasks from the selected Kanban board if one is set
-    if (this.plugin.settings.kanbanBoardPath) {
-      try {
-        await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-      } catch (error) {
-        console.error('Failed loading Kanban tasks:', error);
+    // Small delay to ensure metadata cache is ready and reload boards
+    setTimeout(async () => {
+      await this.loadKanbanBoards();
+      
+      // Load tasks from the selected Kanban board if one is set
+      if (this.plugin.settings.kanbanBoardPath) {
+        try {
+          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+        } catch (error) {
+          console.error('Failed loading Kanban tasks:', error);
+        }
       }
-    }
+    }, 500);
   }
   
   private initializeSvgElements() {
@@ -1108,8 +1113,12 @@ export class CircularTimerView extends ItemView {
       // Get the original task text (without any timer info)
       let originalText = taskTextElement.textContent || '';
       
-      // Remove existing timer info if present (matches patterns like " - 🍎 1:23" or " [1:23]")
-      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '').trim();
+      // Remove ALL timer-like patterns (with or without emoji)
+      originalText = originalText
+        .replace(/ - 🍎 \d+:\d{2}/g, '')  // Pattern with apple emoji
+        .replace(/ - \d+:\d{2}/g, '')      // Pattern without emoji (like "- 1:01")
+        .replace(/ \[\d+:\d{2}\]/g, '')    // Square bracket pattern
+        .trim();
       
       const content = await this.app.vault.read(file);
       const lines = content.split('\n');
@@ -1120,8 +1129,11 @@ export class CircularTimerView extends ItemView {
         
         // Check if this line contains the task (without timer info)
         if ((line.includes('- [ ]') || line.includes('- [x]')) && line.includes(originalText)) {
-          // Remove old timer info from the line (all patterns)
-          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '');
+          // Remove old timer info from the line (all patterns including without emoji)
+          let cleanLine = line
+            .replace(/ - 🍎 \d+:\d{2}/g, '')  // Pattern with apple emoji
+            .replace(/ - \d+:\d{2}/g, '')      // Pattern without emoji
+            .replace(/ \[\d+:\d{2}\]/g, '');   // Square bracket pattern
           
           // Add new timer info
           if (timeString && timeString !== '0:00') {
@@ -1381,17 +1393,16 @@ export class CircularTimerView extends ItemView {
         await this.loadKanbanBoards();
       }));
     }
-    
-    // Load boards initially
-    await this.loadKanbanBoards();
   }
 
   private async loadKanbanBoards(): Promise<void> {
     if (!this.kanbanSelector) {
-      console.warn('Kanban selector not initialized');
+      console.warn('[KANBAN LOAD] Kanban selector not initialized');
       return;
     }
   
+    console.log('[KANBAN LOAD] Loading Kanban boards...');
+    
     // Clear existing options except the default one
     while (this.kanbanSelector.options.length > 1) {
       this.kanbanSelector.remove(1);
@@ -1400,6 +1411,7 @@ export class CircularTimerView extends ItemView {
     try {
       // Get all markdown files that might be Kanban boards
       const files = this.app.vault.getMarkdownFiles();
+      console.log(`[KANBAN LOAD] Checking ${files.length} markdown files`);
       
       const kanbanFiles: TFile[] = [];
       const checkedFiles = new Set<string>(); // Track checked files to avoid duplicates
@@ -1453,6 +1465,8 @@ export class CircularTimerView extends ItemView {
         }
       }
       
+      console.log(`[KANBAN LOAD] Found ${kanbanFiles.length} Kanban files`);
+      
       if (kanbanFiles.length === 0) {
         const option = this.kanbanSelector.createEl('option', {
           value: '',
@@ -1468,6 +1482,8 @@ export class CircularTimerView extends ItemView {
       // Add boards to selector
       for (const file of kanbanFiles) {
         const displayName = file.basename.replace(/\.kanban$/, '');
+        console.log(`[KANBAN LOAD] Adding board: ${displayName} (${file.path})`);
+        
         const option = this.kanbanSelector.createEl('option', {
           value: file.path,
           text: displayName
@@ -1476,6 +1492,7 @@ export class CircularTimerView extends ItemView {
         // Select the current board if it matches
         if (this.plugin.settings.kanbanBoardPath === file.path) {
           option.selected = true;
+          console.log(`[KANBAN LOAD] Selected board: ${displayName}`);
         }
       }
     
@@ -1800,8 +1817,11 @@ export class CircularTimerView extends ItemView {
           
           // Remove timer info from displayed text to avoid duplication
           let displayText = task.text;
-          displayText = displayText.replace(/ - 🍎 \d+:\d{2}/g, '').replace(/ \[\d+:\d{2}\]/g, '');
-          taskContent.createSpan({ text: displayText, cls: 'task-text' });
+          displayText = displayText
+            .replace(/ - 🍎 \d+:\d{2}/g, '')  // Pattern with apple emoji
+            .replace(/ - \d+:\d{2}/g, '')      // Pattern without emoji
+            .replace(/ \[\d+:\d{2}\]/g, '');   // Square bracket pattern
+          taskContent.createSpan({ text: displayText.trim(), cls: 'task-text' });
           const taskTimer = taskContent.createSpan({ text: '', cls: 'task-timer' });
           
           // Restore previous timer if exists
