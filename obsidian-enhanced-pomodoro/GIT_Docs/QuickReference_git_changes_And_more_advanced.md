@@ -1,3 +1,43 @@
+# Enhanced Pomodoro Timer - Git Change Log
+
+## Recent Changes (Nov 18-19, 2025 - Session 11)
+
+### Latest Commit: Fix infinite update loop for completed tasks
+**Date:** Nov 19, 2025 10:18am  
+**Issue:** Completed tasks were triggering infinite Kanban file updates
+
+**Fixes:**
+- Added check in `updateTaskInKanbanFile` to skip completed tasks
+- Added check in `updateActiveTaskTimer` to skip completed tasks  
+- Clear `activeTaskId` when task is marked complete via checkbox
+- Prevent timer updates from running on completed tasks
+
+### Previous Commit: Fix pause display, settings layout, and timer persistence
+**Date:** Nov 19, 2025 9:31am  
+**Issues Fixed:**
+1. Timer showed [0:00] when paused instead of accumulated time
+2. Empty button in settings between "Break Sounds" sections
+3. Timer reset to 0:00 when task restored via drag & drop
+
+**Solutions:**
+- Added `resumeTaskTimer()` method to reset `lastUpdateTime` on resume
+- Fixed `pauseTaskTimer()` to work when timer is not running
+- Parse timer patterns from Kanban file (e.g., "Task - 🍎 25:30")
+- Store parsed timers in `taskTimersByText` map
+
+### Earlier Commit: Add quick break pause/resume and task completion logging
+**Date:** Nov 18, 2025 5:04pm  
+**Features:**
+- Added `pauseTaskTimer()` method for proper pause/resume during quick breaks
+- Task completion logging to both Kanban file and dedicated log file
+- Final timer value updated in Kanban file when task is completed
+
+### Earlier Commit: Fix multiple task selection and timer persistence
+**Date:** Nov 18, 2025 (earlier)  
+**Fixes:**
+1. Multiple tasks showing selected (purple border) - Fixed DOM classList methods
+2. Timer persistence when tasks move between columns - Dual tracking with Maps
+3. Added `taskTimersByText` Map for better timer persistence
 
 ## Quick Reference Card:
 ``` bash
