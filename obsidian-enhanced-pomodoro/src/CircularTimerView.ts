@@ -1119,6 +1119,12 @@ export class CircularTimerView extends ItemView {
       const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
       if (!taskElement) return;
       
+      // Don't update completed tasks
+      if (taskElement.classList.contains('task-completed')) {
+        console.log('[KANBAN UPDATE] Skipping completed task:', taskId);
+        return;
+      }
+      
       const taskTextElement = taskElement.querySelector('.task-text');
       if (!taskTextElement) return;
       
@@ -1845,6 +1851,13 @@ export class CircularTimerView extends ItemView {
             
             // If task is being completed, log the total time
             if (checkbox.checked) {
+              // Clear active task if this was it (prevent timer updates on completed task)
+              if (this.activeTaskId === taskId) {
+                console.log('[TASK COMPLETE] Clearing active task as it was just completed');
+                this.activeTaskId = null;
+                this.currentTaskElement = null;
+              }
+              
               // Get the total time for this task
               const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
               
@@ -2196,6 +2209,11 @@ export class CircularTimerView extends ItemView {
   // Call this method from the animation loop to update active task timer
   public updateActiveTaskTimer() {
     if (!this.activeTaskId || !this.currentTaskElement) return;
+    
+    // Don't update if task is completed
+    if (this.currentTaskElement.classList.contains('task-completed')) {
+      return;
+    }
     
     const timerElement = this.currentTaskElement.querySelector('.task-timer') as HTMLElement;
     if (timerElement) {

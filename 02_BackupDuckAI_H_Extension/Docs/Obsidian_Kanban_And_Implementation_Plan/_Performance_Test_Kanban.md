@@ -138,7 +138,7 @@ status: In Progress
 - [ ] Fix authentication bug
 - [ ] Update dependencies - 🍎 1:35
 - [ ] Refactor database queries - 🍎 0:11
-- [x] Implement user authentication system - 🍎 0:15
+- [x] Implement user authentication system - 🍎 0:21
 - [ ] Create login page UI - 🍎 3:12
 
 

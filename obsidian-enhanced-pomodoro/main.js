@@ -847,6 +847,10 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       if (!(file instanceof import_obsidian.TFile)) return;
       const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
       if (!taskElement) return;
+      if (taskElement.classList.contains("task-completed")) {
+        console.log("[KANBAN UPDATE] Skipping completed task:", taskId);
+        return;
+      }
       const taskTextElement = taskElement.querySelector(".task-text");
       if (!taskTextElement) return;
       let originalText = taskTextElement.textContent || "";
@@ -1345,6 +1349,11 @@ var CircularTimerView = class extends import_obsidian.ItemView {
             task.completed = checkbox.checked;
             taskItem.toggleClass("task-completed", checkbox.checked);
             if (checkbox.checked) {
+              if (this.activeTaskId === taskId) {
+                console.log("[TASK COMPLETE] Clearing active task as it was just completed");
+                this.activeTaskId = null;
+                this.currentTaskElement = null;
+              }
               const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
               if (totalTime > 0) {
                 const kanbanFileName = boardPath.split("/").pop()?.replace(".md", "") || "Unknown";
@@ -1598,6 +1607,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
   // Call this method from the animation loop to update active task timer
   updateActiveTaskTimer() {
     if (!this.activeTaskId || !this.currentTaskElement) return;
+    if (this.currentTaskElement.classList.contains("task-completed")) {
+      return;
+    }
     const timerElement = this.currentTaskElement.querySelector(".task-timer");
     if (timerElement) {
       this.updateTaskTimer(timerElement);
