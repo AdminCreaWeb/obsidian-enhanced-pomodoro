@@ -2,7 +2,17 @@
 
 ## Recent Changes (Nov 18-19, 2025 - Session 11)
 
-### Latest Commit: Fix infinite update loop for completed tasks
+### Latest Commit: Fix task state sync when unchecking via Kanban file
+**Date:** Nov 19, 2025 10:25am  
+**Issue:** Tasks unchecked via Kanban file still showed as completed in UI, causing warnings and console errors
+
+**Fixes:**
+- Set initial `task-completed` class when loading tasks from file
+- Add handler for unchecking tasks to restore them to active state
+- Update Kanban file when task is unchecked to preserve timer
+- Tasks can now be properly reused after being unchecked
+
+### Previous Commit: Fix infinite update loop for completed tasks
 **Date:** Nov 19, 2025 10:18am  
 **Issue:** Completed tasks were triggering infinite Kanban file updates
 
