@@ -1662,7 +1662,27 @@ export class CircularTimerView extends ItemView {
               const checkboxMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
               if (checkboxMatch) {
                 const isCompleted = checkboxMatch[1].toLowerCase() === 'x';
-                const text = checkboxMatch[2].trim();
+                let text = checkboxMatch[2].trim();
+                
+                // Extract timer if present (e.g., "Task Name - 🍎 25:30" or "Task Name - 25:30")
+                const timerMatch = text.match(/ - (?:🍎 )?(\d+):(\d{2})(?:\s|$)/);
+                if (timerMatch) {
+                  const minutes = parseInt(timerMatch[1], 10);
+                  const seconds = parseInt(timerMatch[2], 10);
+                  const totalSeconds = minutes * 60 + seconds;
+                  
+                  // Remove timer from text to get clean task name
+                  const cleanText = text.replace(/ - (?:🍎 )?\d+:\d{2}/, '').trim();
+                  
+                  // Store the timer by clean task text
+                  if (totalSeconds > 0) {
+                    this.taskTimersByText.set(cleanText, totalSeconds);
+                    console.log(`[KANBAN LOAD] Parsed timer for "${cleanText}": ${minutes}:${seconds.toString().padStart(2, '0')}`);
+                  }
+                  
+                  text = cleanText;
+                }
+                
                 if (text && text.length > 2) {
                   tasks.push({
                     text: text,
@@ -1676,7 +1696,27 @@ export class CircularTimerView extends ItemView {
               // Match regular list items: - task or * task
               const listMatch = line.match(/^[-*]\s+([^[\]].+)$/);
               if (listMatch) {
-                const text = listMatch[1].trim();
+                let text = listMatch[1].trim();
+                
+                // Extract timer if present
+                const timerMatch = text.match(/ - (?:🍎 )?(\d+):(\d{2})(?:\s|$)/);
+                if (timerMatch) {
+                  const minutes = parseInt(timerMatch[1], 10);
+                  const seconds = parseInt(timerMatch[2], 10);
+                  const totalSeconds = minutes * 60 + seconds;
+                  
+                  // Remove timer from text to get clean task name
+                  const cleanText = text.replace(/ - (?:🍎 )?\d+:\d{2}/, '').trim();
+                  
+                  // Store the timer by clean task text
+                  if (totalSeconds > 0) {
+                    this.taskTimersByText.set(cleanText, totalSeconds);
+                    console.log(`[KANBAN LOAD] Parsed timer for "${cleanText}": ${minutes}:${seconds.toString().padStart(2, '0')}`);
+                  }
+                  
+                  text = cleanText;
+                }
+                
                 if (text && text.length > 2) {
                   tasks.push({
                     text: text,
@@ -2184,36 +2224,50 @@ export class CircularTimerView extends ItemView {
     }
   }
   
-  // Pause task timer (for quick breaks)
+  // Pause task timer (for quick breaks and manual pause)
   public pauseTaskTimer() {
-    if (this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === 'work') {
-      // Save accumulated time
-      const elapsed = (Date.now() - this.lastUpdateTime) / 1000;
-      const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
-      const newTime = currentTime + elapsed;
-      this.taskTimers.set(this.activeTaskId, newTime);
-      
-      // Save by task text too
-      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
-      if (taskElement) {
-        const taskText = taskElement.querySelector('.task-text')?.textContent || '';
-        if (taskText) {
-          this.taskTimersByText.set(taskText, newTime);
+    if (this.activeTaskId) {
+      // Save accumulated time if we're in work mode
+      if (this.plugin.currentMode === 'work') {
+        const elapsed = (Date.now() - this.lastUpdateTime) / 1000;
+        const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
+        const newTime = currentTime + elapsed;
+        this.taskTimers.set(this.activeTaskId, newTime);
+        
+        // Save by task text too
+        const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+        if (taskElement) {
+          const taskText = taskElement.querySelector('.task-text')?.textContent || '';
+          if (taskText) {
+            this.taskTimersByText.set(taskText, newTime);
+          }
+        }
+        
+        console.log('[TASK TIMER] Paused with time:', Math.floor(newTime / 60) + ':' + String(Math.floor(newTime % 60)).padStart(2, '0'));
+        
+        // Update display immediately with saved time
+        const timerElement = this.currentTaskElement?.querySelector('.task-timer') as HTMLElement;
+        if (timerElement) {
+          const minutes = Math.floor(newTime / 60);
+          const seconds = Math.floor(newTime % 60);
+          timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, '0')}]`);
         }
       }
-      
-      console.log('[TASK TIMER] Paused with time:', Math.floor(newTime / 60) + ':' + String(Math.floor(newTime % 60)).padStart(2, '0'));
-      
-      // Update display immediately
-      const timerElement = this.currentTaskElement?.querySelector('.task-timer') as HTMLElement;
-      if (timerElement) {
-        const minutes = Math.floor(newTime / 60);
-        const seconds = Math.floor(newTime % 60);
-        timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, '0')}]`);
-      }
-      
-      // Reset update time (will be set again when timer resumes)
+    }
+  }
+  
+  // Resume task timer (after pause or quick break)
+  public resumeTaskTimer() {
+    if (this.activeTaskId) {
+      // Reset the lastUpdateTime so timer resumes from correct point
       this.lastUpdateTime = Date.now();
+      console.log('[TASK TIMER] Resumed at', new Date().toLocaleTimeString());
+      
+      // Force an immediate display update
+      const timerElement = this.currentTaskElement?.querySelector('.task-timer') as HTMLElement;
+      if (timerElement && this.plugin.currentMode === 'work') {
+        this.updateTaskTimer(timerElement);
+      }
     }
   }
   

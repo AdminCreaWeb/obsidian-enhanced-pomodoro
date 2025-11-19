@@ -1214,7 +1214,19 @@ var CircularTimerView = class extends import_obsidian.ItemView {
               const checkboxMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
               if (checkboxMatch) {
                 const isCompleted = checkboxMatch[1].toLowerCase() === "x";
-                const text = checkboxMatch[2].trim();
+                let text = checkboxMatch[2].trim();
+                const timerMatch = text.match(/ - (?:🍎 )?(\d+):(\d{2})(?:\s|$)/);
+                if (timerMatch) {
+                  const minutes = parseInt(timerMatch[1], 10);
+                  const seconds = parseInt(timerMatch[2], 10);
+                  const totalSeconds = minutes * 60 + seconds;
+                  const cleanText = text.replace(/ - (?:🍎 )?\d+:\d{2}/, "").trim();
+                  if (totalSeconds > 0) {
+                    this.taskTimersByText.set(cleanText, totalSeconds);
+                    console.log(`[KANBAN LOAD] Parsed timer for "${cleanText}": ${minutes}:${seconds.toString().padStart(2, "0")}`);
+                  }
+                  text = cleanText;
+                }
                 if (text && text.length > 2) {
                   tasks.push({
                     text,
@@ -1226,7 +1238,19 @@ var CircularTimerView = class extends import_obsidian.ItemView {
               }
               const listMatch = line.match(/^[-*]\s+([^[\]].+)$/);
               if (listMatch) {
-                const text = listMatch[1].trim();
+                let text = listMatch[1].trim();
+                const timerMatch = text.match(/ - (?:🍎 )?(\d+):(\d{2})(?:\s|$)/);
+                if (timerMatch) {
+                  const minutes = parseInt(timerMatch[1], 10);
+                  const seconds = parseInt(timerMatch[2], 10);
+                  const totalSeconds = minutes * 60 + seconds;
+                  const cleanText = text.replace(/ - (?:🍎 )?\d+:\d{2}/, "").trim();
+                  if (totalSeconds > 0) {
+                    this.taskTimersByText.set(cleanText, totalSeconds);
+                    console.log(`[KANBAN LOAD] Parsed timer for "${cleanText}": ${minutes}:${seconds.toString().padStart(2, "0")}`);
+                  }
+                  text = cleanText;
+                }
                 if (text && text.length > 2) {
                   tasks.push({
                     text,
@@ -1596,28 +1620,40 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       this.lastUpdateTime = Date.now();
     }
   }
-  // Pause task timer (for quick breaks)
+  // Pause task timer (for quick breaks and manual pause)
   pauseTaskTimer() {
-    if (this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === "work") {
-      const elapsed = (Date.now() - this.lastUpdateTime) / 1e3;
-      const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
-      const newTime = currentTime + elapsed;
-      this.taskTimers.set(this.activeTaskId, newTime);
-      const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
-      if (taskElement) {
-        const taskText = taskElement.querySelector(".task-text")?.textContent || "";
-        if (taskText) {
-          this.taskTimersByText.set(taskText, newTime);
+    if (this.activeTaskId) {
+      if (this.plugin.currentMode === "work") {
+        const elapsed = (Date.now() - this.lastUpdateTime) / 1e3;
+        const currentTime = this.taskTimers.get(this.activeTaskId) || 0;
+        const newTime = currentTime + elapsed;
+        this.taskTimers.set(this.activeTaskId, newTime);
+        const taskElement = this.currentTaskElement || this.tasksContainer?.querySelector(`[data-task-id="${this.activeTaskId}"]`);
+        if (taskElement) {
+          const taskText = taskElement.querySelector(".task-text")?.textContent || "";
+          if (taskText) {
+            this.taskTimersByText.set(taskText, newTime);
+          }
+        }
+        console.log("[TASK TIMER] Paused with time:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
+        const timerElement = this.currentTaskElement?.querySelector(".task-timer");
+        if (timerElement) {
+          const minutes = Math.floor(newTime / 60);
+          const seconds = Math.floor(newTime % 60);
+          timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, "0")}]`);
         }
       }
-      console.log("[TASK TIMER] Paused with time:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
-      const timerElement = this.currentTaskElement?.querySelector(".task-timer");
-      if (timerElement) {
-        const minutes = Math.floor(newTime / 60);
-        const seconds = Math.floor(newTime % 60);
-        timerElement.setText(` [${minutes}:${seconds.toString().padStart(2, "0")}]`);
-      }
+    }
+  }
+  // Resume task timer (after pause or quick break)
+  resumeTaskTimer() {
+    if (this.activeTaskId) {
       this.lastUpdateTime = Date.now();
+      console.log("[TASK TIMER] Resumed at", (/* @__PURE__ */ new Date()).toLocaleTimeString());
+      const timerElement = this.currentTaskElement?.querySelector(".task-timer");
+      if (timerElement && this.plugin.currentMode === "work") {
+        this.updateTaskTimer(timerElement);
+      }
     }
   }
   // Log task time to dedicated task timer log file
@@ -2955,9 +2991,6 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       });
     }).setDisabled(!this.plugin.settings.enableQuickBreak);
     new import_obsidian2.Setting(containerEl).setName("Break Sounds").setHeading();
-    new import_obsidian2.Setting(containerEl).addButton((button) => {
-      button.setIcon("refresh-sp").setTooltip("Refresh SoundsPreview").onClick(() => this.plugin.refreshSoundsPreview(kanbanBoardSetting.controlEl));
-    });
     new import_obsidian2.Setting(containerEl).setName("Quick Break Sound Preview").setDesc("Test the currently selected quick break sound").addButton(
       (button) => button.setButtonText("Test").onClick(() => {
         const selectedSound = this.plugin.settings.quickBreakSound;

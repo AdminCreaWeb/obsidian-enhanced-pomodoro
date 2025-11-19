@@ -1845,15 +1845,6 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Break Sounds')
       .setHeading();
-    
-    // Add refresh button
-    new Setting(containerEl).addButton(button => {
-      button
-        .setIcon('refresh-sp')
-        .setTooltip('Refresh SoundsPreview')
-        .onClick(() => this.plugin.refreshSoundsPreview(kanbanBoardSetting.controlEl));
-    });
-
 
     new Setting(containerEl)
       .setName('Quick Break Sound Preview')

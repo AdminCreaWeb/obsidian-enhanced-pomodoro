@@ -41,52 +41,6 @@
             "id": "0719f6acde5fd243",
             "type": "leaf",
             "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "kanban_sync_options"
-            }
-          },
-          {
-            "id": "ff4bea425b06167f",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": []
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "_Implementation_Plan_Kanban"
-            }
-          },
-          {
-            "id": "19ae4940324d905b",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": []
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "_Implementation_Plan_Kanban"
-            }
-          },
-          {
-            "id": "317926e26c72ee01",
-            "type": "leaf",
-            "state": {
               "type": "kanban",
               "state": {
                 "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
@@ -97,72 +51,10 @@
               },
               "icon": "lucide-trello",
               "title": "_Performance_Test_Kanban"
-            }
-          },
-          {
-            "id": "7e99a0382cc48578",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": []
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "_Performance_Test_Kanban"
-            }
-          },
-          {
-            "id": "59b81aac3ddc464d",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": []
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "_Performance_Test_Kanban"
-            }
-          },
-          {
-            "id": "2d3aa091e62ba6c1",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": []
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "_Performance_Test_Kanban"
-            }
-          },
-          {
-            "id": "21b80e14dd527665",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Pomodoro Log.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "Pomodoro Log"
             }
           }
         ],
-        "currentTab": 9
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -224,8 +116,19 @@
               "icon": "bar-chart-horizontal",
               "title": "Task progress bar"
             }
+          },
+          {
+            "id": "eecc8ad56846451f",
+            "type": "leaf",
+            "state": {
+              "type": "progress-tracker",
+              "state": {},
+              "icon": "bar-chart-horizontal",
+              "title": "Task progress bar"
+            }
           }
-        ]
+        ],
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
@@ -293,17 +196,17 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "Pomodoro Log.md",
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of Pomodoro Log"
+              "title": "Outline of _Performance_Test_Kanban"
             }
           },
           {
-            "id": "3e3274cc2217ff5b",
+            "id": "062f215663e8cd00",
             "type": "leaf",
             "state": {
               "type": "circular-timer-view",
@@ -333,13 +236,13 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "21b80e14dd527665",
+  "active": "062f215663e8cd00",
   "lastOpenFiles": [
-    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-    "Pomodoro Log.md",
     "Pomodoro Task Timers.md",
+    "Pomodoro Log.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/kanban_sync_options.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Implementation_Plan_Kanban.md",
+    "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md",
     "Spline integration.md",
     "pomodoro-debug-log.md",

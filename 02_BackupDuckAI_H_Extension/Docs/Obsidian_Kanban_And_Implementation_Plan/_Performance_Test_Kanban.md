@@ -136,10 +136,10 @@ status: In Progress
 ## 🚀 In Progress
 
 - [ ] Fix authentication bug
-- [ ] Update dependencies
-- [ ] Refactor database queries - 🍎 0:06
-- [x] Implement user authentication system - 🍎 3:01
-- [ ] Create login page UI - 🍎 1:16
+- [ ] Update dependencies - 🍎 1:35
+- [ ] Refactor database queries - 🍎 0:11
+- [x] Implement user authentication system - 🍎 0:15
+- [ ] Create login page UI - 🍎 3:12
 
 
 ## ✅ Done
