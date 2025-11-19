@@ -1370,16 +1370,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
                 console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
               }
             } else {
-              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - can be used again`);
-              const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
-              if (totalTime > 0) {
-                const minutes = Math.floor(totalTime / 60);
-                const seconds = Math.floor(totalTime % 60);
-                const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-                this.lastKanbanUpdateTime = 0;
-                this.lastUpdateTimerValue.delete(taskId);
-                await this.updateTaskInKanbanFile(taskId, timeString);
-              }
+              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - available for use`);
             }
             if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
               const currentGroupEl = taskItem.closest(".pomodoro-task-group");
