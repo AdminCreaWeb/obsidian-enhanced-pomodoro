@@ -28,6 +28,58 @@ export class CircularTimerView extends ItemView {
     super(leaf);
   }
 
+  private async updateTaskCompletionState(taskId: string, completed: boolean) {
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return;
+
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) return;
+
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) return;
+
+      const taskTextElement = taskElement.querySelector('.task-text');
+      if (!taskTextElement) return;
+
+      let originalText = taskTextElement.textContent || '';
+      originalText = originalText
+        .replace(/ - 🍎 \d+:\d{2}/g, '')
+        .replace(/ - \d+:\d{2}/g, '')
+        .replace(/ \[\d+:\d{2}\]/g, '')
+        .trim();
+
+      const content = await this.app.vault.read(file);
+      const lines = content.split('\n');
+      let updated = false;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if ((line.includes('- [') || line.includes('* [')) && line.includes(originalText)) {
+          const checkboxPattern = /([-*]\s+\[)([ xX])(\])/;
+
+          if (checkboxPattern.test(line)) {
+            lines[i] = line.replace(checkboxPattern, (_, prefix, _state, suffix) => {
+              const newState = completed ? 'x' : ' ';
+              return `${prefix}${newState}${suffix}`;
+            });
+            updated = true;
+            break;
+          }
+        }
+      }
+
+      if (updated) {
+        await this.app.vault.modify(file, lines.join('\n'));
+        this.lastKanbanUpdateTime = Date.now();
+        console.log(`[KANBAN UPDATE] Task completion state updated: ${originalText} → ${completed ? '[x]' : '[ ]'}`);
+      }
+    } catch (error) {
+      console.error('[KANBAN UPDATE] Failed to update completion state:', error);
+    }
+  }
+
   getViewType(): string {
     return CIRCULAR_TIMER_VIEW;
   }
@@ -1854,6 +1906,8 @@ export class CircularTimerView extends ItemView {
           checkbox.addEventListener('change', async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass('task-completed', checkbox.checked);
+
+            await this.updateTaskCompletionState(taskId, checkbox.checked);
             
             // If task is being completed, log the total time
             if (checkbox.checked) {
@@ -2026,8 +2080,6 @@ export class CircularTimerView extends ItemView {
         const minutes = Math.floor(prevTime / 60);
         const seconds = Math.floor(prevTime % 60);
         const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        this.lastKanbanUpdateTime = 0; // Force update
-        this.lastUpdateTimerValue.delete(this.activeTaskId); // Clear cached value to force update
         await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
       }
     }
@@ -2212,8 +2264,11 @@ export class CircularTimerView extends ItemView {
     const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     timerElement.setText(` [${timeString}]`);
     
-    // Also update the task in the Kanban file if enabled
-    this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+    // Only update the task in the Kanban file when timer is actively running in work mode
+    // This avoids expensive file writes (and reloads) when simply selecting tasks
+    if (this.plugin.isRunning && this.plugin.currentMode === 'work') {
+      this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+    }
   }
   
   // Call this method from the animation loop to update active task timer

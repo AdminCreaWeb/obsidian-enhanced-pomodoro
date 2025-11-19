@@ -1,6 +1,12 @@
 # Enhanced Pomodoro Timer - Development Status
 
 ## 🎯 Latest Update (Nov 19, 2025 - Session 11 Continued)
+**Critical Bug Fixes - Round 8:**
+- ✅ **Completion State Persistence** - Checkbox state immediately synced back to Kanban file
+- ✅ **Unchecked Task Recovery** - Restored ability to reuse tasks without blocking other selections
+- ✅ **Board Switching Stability** - Added guard rails to prevent completion edits from re-triggering loops
+ - ✅ **Reduced Selection Lag** - Only update Kanban file when work timer is running, eliminating file-write spam on simple task clicks
+
 **Critical Bug Fixes - Round 7:**
 - ✅ **Task State Sync Fix** - Tasks unchecked via Kanban file now properly sync with UI
 - ✅ **Uncheck Handler Added** - Tasks can be restored to active state after unchecking
