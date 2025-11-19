@@ -1845,6 +1845,12 @@ export class CircularTimerView extends ItemView {
           });
           checkbox.type = 'checkbox';
           checkbox.checked = task.completed;
+          
+          // Set initial completed state based on checkbox
+          if (task.completed) {
+            taskItem.addClass('task-completed');
+          }
+          
           checkbox.addEventListener('change', async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass('task-completed', checkbox.checked);
@@ -1877,6 +1883,22 @@ export class CircularTimerView extends ItemView {
                 await this.updateTaskInKanbanFile(taskId, finalTimeString);
                 
                 console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+              }
+            } else {
+              // Task is being unchecked - restore it to active state
+              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - can be used again`);
+              
+              // Update Kanban file to reflect unchecked state
+              const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
+              if (totalTime > 0) {
+                const minutes = Math.floor(totalTime / 60);
+                const seconds = Math.floor(totalTime % 60);
+                const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                // Force update the task in Kanban file
+                this.lastKanbanUpdateTime = 0;
+                this.lastUpdateTimerValue.delete(taskId);
+                await this.updateTaskInKanbanFile(taskId, timeString);
               }
             }
             

@@ -52,9 +52,41 @@
               "icon": "lucide-trello",
               "title": "_Performance_Test_Kanban"
             }
+          },
+          {
+            "id": "f9487b4595229e76",
+            "type": "leaf",
+            "state": {
+              "type": "kanban",
+              "state": {
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": []
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "_Performance_Test_Kanban"
+            }
+          },
+          {
+            "id": "c820679b9ce28a90",
+            "type": "leaf",
+            "state": {
+              "type": "kanban",
+              "state": {
+                "file": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": []
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "_Performance_Test_Kanban"
+            }
           }
         ],
-        "currentTab": 2
+        "currentTab": 4
       }
     ],
     "direction": "vertical"
@@ -116,23 +148,13 @@
               "icon": "bar-chart-horizontal",
               "title": "Task progress bar"
             }
-          },
-          {
-            "id": "eecc8ad56846451f",
-            "type": "leaf",
-            "state": {
-              "type": "progress-tracker",
-              "state": {},
-              "icon": "bar-chart-horizontal",
-              "title": "Task progress bar"
-            }
           }
-        ],
-        "currentTab": 4
+        ]
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 300,
+    "collapsed": true
   },
   "right": {
     "id": "f75067d4bcbc7b09",
@@ -206,7 +228,7 @@
             }
           },
           {
-            "id": "062f215663e8cd00",
+            "id": "0c306dc05f554619",
             "type": "leaf",
             "state": {
               "type": "circular-timer-view",
@@ -236,7 +258,7 @@
       "enhanced-pomodoro:Show Pomodoro Timer": false
     }
   },
-  "active": "062f215663e8cd00",
+  "active": "0c306dc05f554619",
   "lastOpenFiles": [
     "Pomodoro Task Timers.md",
     "Pomodoro Log.md",

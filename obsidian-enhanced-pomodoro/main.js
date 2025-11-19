@@ -1345,6 +1345,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           });
           checkbox.type = "checkbox";
           checkbox.checked = task.completed;
+          if (task.completed) {
+            taskItem.addClass("task-completed");
+          }
           checkbox.addEventListener("change", async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass("task-completed", checkbox.checked);
@@ -1365,6 +1368,17 @@ var CircularTimerView = class extends import_obsidian.ItemView {
                 this.lastUpdateTimerValue.delete(taskId);
                 await this.updateTaskInKanbanFile(taskId, finalTimeString);
                 console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+              }
+            } else {
+              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - can be used again`);
+              const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
+              if (totalTime > 0) {
+                const minutes = Math.floor(totalTime / 60);
+                const seconds = Math.floor(totalTime % 60);
+                const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+                this.lastKanbanUpdateTime = 0;
+                this.lastUpdateTimerValue.delete(taskId);
+                await this.updateTaskInKanbanFile(taskId, timeString);
               }
             }
             if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
