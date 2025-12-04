@@ -64,19 +64,31 @@ declare module 'obsidian' {
     };
   }
 }
-import { CircularTimerView, CIRCULAR_TIMER_VIEW } from './CircularTimerView';
+import CircularTimerView, { CIRCULAR_TIMER_VIEW } from './CircularTimerView';
+
+interface SchedulePhase {
+  type: 'work' | 'shortBreak' | 'longBreak';
+  duration: number;
+  name?: string; // Custom name for the phase (optional)
+}
 
 interface TimeSchedule {
   id: string;
   name: string;
-  workDuration: number;
-  shortBreakDuration: number;
-  longBreakDuration: number;
+  // Legacy simple schedule (for backward compatibility)
+  workDuration?: number;
+  shortBreakDuration?: number;
+  longBreakDuration?: number;
+  // New custom sequence support
+  phases?: SchedulePhase[];
+  // Common settings
   autoStartNext: boolean;
   enableQuickBreak: boolean;
   quickBreakDuration: number;
   quickBreakSound: string;
   isDefault?: boolean;
+  // Track current position in custom sequence
+  currentPhaseIndex?: number;
 }
 
 interface EnhancedPomodoroSettings {
@@ -98,14 +110,27 @@ interface EnhancedPomodoroSettings {
   quickBreakDuration: number;
   quickBreakSound: string;
   kanbanIntegration: boolean;
-  // Persist sessions completed count
-  sessionsCompletedCount: number;
-  // Auto-move tasks between columns
+  // Button display settings
+  showButtonTooltips: boolean;
+  buttonStyle: 'icons+text' | 'text' | 'icons';
+  responsiveButtons: boolean; // Auto-switch to icons when sidebar < 575px
+  // Sidebar view settings
+  sidebarView: 'mini-calendar' | 'calendar-tasks' | 'manual';
+  // Calendar settings
+  calendarFilesPath: string; // Path to calendar files directory
+  autoCreateCalendarFiles: boolean; // Auto-create daily kanban files
+  // Schedule summary settings
+  enableScheduleSummary: boolean;
+  scheduleSummaryPath: string;
+  // Per-board progress column settings
+  perBoardProgressColumns: Record<string, string>; // boardPath -> columnTitle
+  // Task timer settings
+  updateTaskTimerInFile: boolean;
+  // Auto-move settings
   autoMoveToProgress: boolean;
   autoMoveToDone: boolean;
-  restrictToProgressTasks: boolean;
-  // Update task timer in Kanban file
-  updateTaskTimerInFile: boolean;
+  // Sessions tracking
+  sessionsCompletedCount: number;
 }
 
 const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
@@ -141,8 +166,16 @@ const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
   sessionsCompletedCount: 0,
   autoMoveToProgress: true,
   autoMoveToDone: true,
-  restrictToProgressTasks: false,
-  updateTaskTimerInFile: true
+  updateTaskTimerInFile: true,
+  showButtonTooltips: true,
+  buttonStyle: 'icons+text' as const,
+  responsiveButtons: true, // Enable responsive layout by default
+  sidebarView: 'mini-calendar' as const,
+  calendarFilesPath: 'Daily Notes', // Default path for calendar files
+  autoCreateCalendarFiles: false, // Don't auto-create by default (user choice)
+  enableScheduleSummary: true, // Enable schedule summary generation
+  scheduleSummaryPath: 'Pomodoro Schedule Summary.md',
+  perBoardProgressColumns: {}, // Empty object initially
 };
 
 export default class EnhancedPomodoro extends Plugin {
@@ -341,7 +374,7 @@ export default class EnhancedPomodoro extends Plugin {
       
       // Initialize timeRemaining with current schedule's work duration
       const currentSchedule = this.getCurrentSchedule();
-      this.timeRemaining = currentSchedule.workDuration * 60;
+      this.timeRemaining = this.getDurationForPhase('work') * 60;
       
       // Register the view
       this.registerView(
@@ -477,6 +510,80 @@ export default class EnhancedPomodoro extends Plugin {
   }
   
   /**
+   * Get the duration for the current phase, supporting both legacy and custom sequences
+   */
+  getDurationForPhase(phase: 'work' | 'shortBreak' | 'longBreak'): number {
+    const schedule = this.getCurrentSchedule();
+    
+    // If using custom phases
+    if (schedule.phases && schedule.phases.length > 0) {
+      // Find the current phase or default to work
+      const currentPhaseIndex = schedule.currentPhaseIndex || 0;
+      const currentPhase = schedule.phases[currentPhaseIndex];
+      
+      if (currentPhase && currentPhase.type === phase) {
+        return currentPhase.duration;
+      }
+      
+      // Find the first occurrence of this phase type
+      const matchingPhase = schedule.phases.find(p => p.type === phase);
+      return matchingPhase ? matchingPhase.duration : 25; // Default fallback
+    }
+    
+    // Legacy schedule support
+    switch (phase) {
+      case 'work': return schedule.workDuration || 25;
+      case 'shortBreak': return schedule.shortBreakDuration || 5;
+      case 'longBreak': return schedule.longBreakDuration || 15;
+      default: return 25;
+    }
+  }
+  
+  /**
+   * Get the current phase information for custom sequences
+   */
+  getCurrentPhase(): SchedulePhase | null {
+    const schedule = this.getCurrentSchedule();
+    
+    if (!schedule.phases || schedule.phases.length === 0) {
+      // Legacy schedule - create phase on the fly
+      return {
+        type: this.currentMode as 'work' | 'shortBreak' | 'longBreak',
+        duration: this.getDurationForPhase(this.currentMode as 'work' | 'shortBreak' | 'longBreak'),
+        name: this.currentMode.charAt(0).toUpperCase() + this.currentMode.slice(1)
+      };
+    }
+    
+    const currentPhaseIndex = schedule.currentPhaseIndex || 0;
+    return schedule.phases[currentPhaseIndex] || null;
+  }
+  
+  /**
+   * Advance to the next phase in custom sequence
+   */
+  advanceToNextPhase(): void {
+    const schedule = this.getCurrentSchedule();
+    
+    if (!schedule.phases || schedule.phases.length === 0) {
+      // Legacy schedule - use standard cycle logic
+      return;
+    }
+    
+    // Find current phase index
+    let currentIndex = schedule.currentPhaseIndex || 0;
+    currentIndex = (currentIndex + 1) % schedule.phases.length;
+    
+    // Update the schedule with new phase index
+    const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
+    if (scheduleIndex !== -1) {
+      this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+      this.saveSettings();
+    }
+    
+    console.log('[Schedule] Advanced to phase', currentIndex, 'of', schedule.phases.length);
+  }
+  
+  /**
    * Gets a schedule by ID
    */
   getSchedule(scheduleId: string): TimeSchedule | undefined {
@@ -573,7 +680,7 @@ export default class EnhancedPomodoro extends Plugin {
     if (this.isRunning) return;
     
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = schedule.workDuration * 60;
+    this.timeRemaining = (schedule.workDuration || 25) * 60;
     this.currentMode = 'work';
     this.isRunning = true;
     this.startTimer();
@@ -586,6 +693,13 @@ export default class EnhancedPomodoro extends Plugin {
     // Check if quick break is enabled in the current schedule
     if (!schedule.enableQuickBreak) {
       new Notice('Quick break is disabled in the current schedule');
+      return;
+    }
+
+    // Quick break only makes sense during a work session. Prevent starting it
+    // from short/long breaks, where there is nothing meaningful to resume.
+    if (this.currentMode !== 'work') {
+      new Notice('Quick break is only available during work sessions.');
       return;
     }
 
@@ -639,42 +753,48 @@ export default class EnhancedPomodoro extends Plugin {
     }
 
     const savedState = this.quickBreakSavedState;
-    this.quickBreakSavedState = null; // Clear saved state
+    this.quickBreakSavedState = null; // Clear saved state so subsequent logic treats this as a normal session
 
     // Show completion notice
-    if (savedState.wasRunning) {
-      console.log('[Quick Break] Resuming timer -', savedState.previousMode, 'with', Math.floor(savedState.previousTime / 60), 'minutes left');
-      new Notice('Quick break over! Resuming timer...');
-      
-      // Restore previous state
-      this.currentMode = savedState.previousMode;
-      this.timeRemaining = savedState.previousTime;
-      this.isRunning = true;
-      this.updateStatusBar();
-      
-      // Update view display and reset task timer tracking
-      const view = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
-      if (view) {
-        if ('updateDisplay' in view) {
-          (view as any).updateDisplay();
-        }
-        // Reset lastUpdateTime so task timer resumes correctly
-        if ('lastUpdateTime' in view) {
-          (view as any).lastUpdateTime = Date.now();
-          console.log('[Quick Break] Task timer tracking reset');
-        }
+    // Always restore the previous mode/time. If the timer was running before
+    // the quick break, resume automatically; otherwise just restore the state
+    // and wait for the user to start the timer again.
+    this.currentMode = savedState.previousMode;
+    this.timeRemaining = savedState.previousTime;
+    this.isRunning = savedState.wasRunning;
+    this.updateStatusBar();
+
+    const view = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+    if (view) {
+      if ('updateDisplay' in view) {
+        (view as any).updateDisplay();
       }
-      
-      // Log quick break end
-      await this.logSession('quick_break_end');
-      this.startTimer();
-    } else {
-      console.log('[Quick Break] Timer was not running, resetting');
-      new Notice('Quick break over!');
-      // Log quick break end
-      await this.logSession('quick_break_end');
-      this.resetTimer();
+      // Reset lastUpdateTime so task timer resumes correctly when resuming
+      if (savedState.wasRunning && 'lastUpdateTime' in view) {
+        (view as any).lastUpdateTime = Date.now();
+        console.log('[Quick Break] Task timer tracking reset');
+      }
     }
+
+    new Notice('Quick break over! Resuming previous session' + (savedState.wasRunning ? '' : ' (timer paused)') + '.');
+    await this.logSession('quick_break_end');
+
+    if (savedState.wasRunning) {
+      this.startTimer();
+    }
+  }
+  
+  async endCurrentCycle() {
+    // If in quick break, restore to previous work session
+    if (this.quickBreakSavedState) {
+      console.log('[End Cycle] Ending quick break, restoring previous state');
+      await this.restoreAfterQuickBreak();
+      return;
+    }
+    
+    // Otherwise, complete the current session and move to next phase
+    console.log('[End Cycle] Ending current session phase');
+    await this.completeSession();
   }
   
   playSound(sound: string) {
@@ -838,8 +958,18 @@ export default class EnhancedPomodoro extends Plugin {
     }
     // Reset to work mode
     this.currentMode = 'work';
+    
+    // Reset custom sequence phase index
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = schedule.workDuration * 60;
+    if (schedule.phases && schedule.phases.length > 0) {
+      const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
+      if (scheduleIndex !== -1) {
+        this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
+        this.saveSettings();
+      }
+    }
+    
+    this.timeRemaining = this.getDurationForPhase('work') * 60;
     
     // Also reset sessions count on manual reset
     this.sessionsCompleted = 0;
@@ -887,22 +1017,50 @@ export default class EnhancedPomodoro extends Plugin {
     this.settings.sessionsCompletedCount = this.sessionsCompleted;
     await this.saveSettings();
     
-    const isLongBreak = this.sessionsCompleted % 4 === 0;
-    this.currentMode = isLongBreak ? 'longBreak' : 'shortBreak';
-    this.timeRemaining = isLongBreak 
-      ? schedule.longBreakDuration * 60 
-      : schedule.shortBreakDuration * 60;
-    
     console.log('  → Work Complete! Sessions:', this.sessionsCompleted);
-    console.log('  → Long Break Check: ' + this.sessionsCompleted + ' % 4 = ' + (this.sessionsCompleted % 4));
-    console.log('  → Next Break Type:', isLongBreak ? 'LONG BREAK (🎆)' : 'Short Break');
-    console.log('  → Break Duration:', Math.floor(this.timeRemaining / 60), 'minutes');
-    
-    new Notice(`Time for a ${isLongBreak ? 'long' : 'short'} break!`);
+    new Notice(`Work session complete!`);
     await this.logSession('work_complete');
     
+    // Play work completion sound
+    this.playSound('shortbreak'); // Use short break sound for work completion
+    
+    // Determine next phase
+    let nextMode: 'shortBreak' | 'longBreak';
+    let nextDuration: number;
+    
+    if (schedule.phases && schedule.phases.length > 0) {
+      // Custom sequence - advance to next phase
+      this.advanceToNextPhase();
+      const nextPhase = this.getCurrentPhase();
+      
+      if (nextPhase && (nextPhase.type === 'shortBreak' || nextPhase.type === 'longBreak')) {
+        nextMode = nextPhase.type;
+        nextDuration = nextPhase.duration;
+        console.log('  → Custom Sequence Next Phase:', nextPhase.name || nextPhase.type);
+      } else {
+        // Fallback to legacy logic if custom sequence is malformed
+        const isLongBreak = this.sessionsCompleted % 4 === 0;
+        nextMode = isLongBreak ? 'longBreak' : 'shortBreak';
+        nextDuration = this.getDurationForPhase(nextMode);
+        console.log('  → Fallback to Legacy Break Type:', nextMode);
+      }
+    } else {
+      // Legacy schedule logic
+      const isLongBreak = this.sessionsCompleted % 4 === 0;
+      nextMode = isLongBreak ? 'longBreak' : 'shortBreak';
+      nextDuration = this.getDurationForPhase(nextMode);
+      console.log('  → Legacy Break Type:', nextMode, 'Long Break:', isLongBreak);
+    }
+    
+    this.currentMode = nextMode;
+    this.timeRemaining = nextDuration * 60;
+    
+    console.log('  → Next Break Duration:', Math.floor(this.timeRemaining / 60), 'minutes');
+    
+    new Notice(`Time for a ${nextMode === 'longBreak' ? 'long' : 'short'} break!`);
+    
     // Play appropriate break sound
-    this.playSound(isLongBreak ? 'longbreak' : 'shortbreak');
+    this.playSound(nextMode === 'longBreak' ? 'longbreak' : 'shortbreak');
     
     // Update status bar to show new mode
     this.updateStatusBar();
@@ -931,12 +1089,29 @@ export default class EnhancedPomodoro extends Plugin {
     // Normal break completion - reset to work mode
     console.log('  → Break Complete! Returning to work mode');
     this.currentMode = 'work';
-    this.timeRemaining = schedule.workDuration * 60;
+    
+    // For custom sequences, advance to next phase
+    if (schedule.phases && schedule.phases.length > 0) {
+      this.advanceToNextPhase();
+      const nextPhase = this.getCurrentPhase();
+      if (nextPhase && nextPhase.type === 'work') {
+        this.timeRemaining = nextPhase.duration * 60;
+        console.log('  → Custom Sequence Next Phase:', nextPhase.name || 'Work');
+      } else {
+        // Fallback to default work duration
+        this.timeRemaining = this.getDurationForPhase('work') * 60;
+        console.log('  → Fallback to default work duration');
+      }
+    } else {
+      // Legacy schedule
+      this.timeRemaining = this.getDurationForPhase('work') * 60;
+    }
+    
     new Notice('Break is over! Time to work!');
     await this.logSession('break_complete');
     
     // Play work start sound (default bell)
-    this.playSound(this.quickBreakSavedState ? 'quickbreak' : 'ding');
+    this.playSound('ding');
     
     // Update status bar to show new mode
     this.updateStatusBar();
@@ -977,13 +1152,13 @@ export default class EnhancedPomodoro extends Plugin {
     const schedule = this.getCurrentSchedule();
     switch (this.currentMode) {
       case 'work':
-        return schedule.workDuration * 60;
+        return (schedule.workDuration || 25) * 60;
       case 'shortBreak':
-        return schedule.shortBreakDuration * 60;
+        return (schedule.shortBreakDuration || 5) * 60;
       case 'longBreak':
-        return schedule.longBreakDuration * 60;
+        return (schedule.longBreakDuration || 15) * 60;
       default:
-        return schedule.workDuration * 60;
+        return (schedule.workDuration || 25) * 60;
     }
   }
   
@@ -1758,14 +1933,20 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         })
       );
 
+    // Per-Board Progress Column Settings
     new Setting(containerEl)
-      .setName('Restrict to Progress tasks only')
-      .setDesc('Only allow tasks in "In Progress" column to start/continue timer')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.restrictToProgressTasks)
-        .onChange(async (value) => {
-          this.plugin.settings.restrictToProgressTasks = value;
-          await this.plugin.saveSettings();
+      .setName('Per-Board Progress Columns')
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName('Progress Column Selection')
+      .setDesc('Configure preferred progress columns for each kanban board')
+      .addButton(button => button
+        .setButtonText('Configure Progress Columns')
+        .setCta()
+        .onClick(() => {
+          // Open progress column configuration modal
+          this.openProgressColumnConfig();
         })
       );
 
@@ -1776,6 +1957,29 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.updateTaskTimerInFile)
         .onChange(async (value) => {
           this.plugin.settings.updateTaskTimerInFile = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Enable Schedule Summary')
+      .setDesc('Automatically generate schedule summary from task timer logs')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.enableScheduleSummary)
+        .onChange(async (value) => {
+          this.plugin.settings.enableScheduleSummary = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Schedule Summary Path')
+      .setDesc('Path to the schedule summary file')
+      .addText(text => text
+        .setPlaceholder('Pomodoro Schedule Summary.md')
+        .setValue(this.plugin.settings.scheduleSummaryPath)
+        .onChange(async (value) => {
+          this.plugin.settings.scheduleSummaryPath = value;
           await this.plugin.saveSettings();
         })
       );
@@ -1841,6 +2045,204 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
       .setDisabled(!this.plugin.settings.enableQuickBreak);
 
     
+    // Button Display Settings
+    new Setting(containerEl)
+      .setName('Button Display Settings')
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName('Button Style')
+      .setDesc('Choose how timer control buttons are displayed')
+      .addDropdown(dropdown => {
+        dropdown
+          .addOption('icons+text', 'Icons + Text')
+          .addOption('text', 'Text Only')
+          .addOption('icons', 'Icons Only');
+        dropdown.setValue(this.plugin.settings.buttonStyle);
+        dropdown.onChange(async (value: string) => {
+          this.plugin.settings.buttonStyle = value as 'icons+text' | 'text' | 'icons';
+          await this.plugin.saveSettings();
+          
+          // Update the view to reflect new button style
+          const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+          if (view) {
+            (view as any).updateButtonStyle();
+          }
+        });
+      });
+
+    new Setting(containerEl)
+      .setName('Show Button Tooltips')
+      .setDesc('Show tooltips on timer control buttons (only applies to icons-only mode)')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.showButtonTooltips)
+        .onChange(async (value) => {
+          this.plugin.settings.showButtonTooltips = value;
+          await this.plugin.saveSettings();
+          
+          // Update the view to reflect tooltip setting
+          const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+          if (view) {
+            (view as any).updateButtonTooltips();
+          }
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Responsive Button Layout')
+      .setDesc('Automatically switch to icons-only when sidebar width is less than 575px')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.responsiveButtons)
+        .onChange(async (value) => {
+          this.plugin.settings.responsiveButtons = value;
+          await this.plugin.saveSettings();
+          
+          // Update the view to reflect responsive setting
+          const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+          if (view) {
+            (view as any).updateResponsiveLayout();
+          }
+        })
+      );
+
+    // Sidebar View Settings
+    new Setting(containerEl)
+      .setName('Sidebar View')
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName('Default Sidebar View')
+      .setDesc('Choose the default view when opening the sidebar')
+      .addDropdown(dropdown => {
+        dropdown
+          .addOption('mini-calendar', 'Mini Calendar')
+          .addOption('calendar-tasks', 'Calendar Tasks')
+          .addOption('manual', 'Manual Kanban');
+        dropdown.setValue(this.plugin.settings.sidebarView);
+        dropdown.onChange(async (value: string) => {
+          this.plugin.settings.sidebarView = value as 'mini-calendar' | 'calendar-tasks' | 'manual';
+          await this.plugin.saveSettings();
+          
+          // Update the view to switch tabs
+          const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+          if (view) {
+            (view as any).switchSidebarView(value);
+          }
+        });
+      });
+
+    // Calendar Settings
+    new Setting(containerEl)
+      .setName('Calendar Settings')
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName('Calendar Files Path')
+      .setDesc('Directory where daily kanban files are stored')
+      .addText(text => text
+        .setPlaceholder('Daily Notes')
+        .setValue(this.plugin.settings.calendarFilesPath)
+        .onChange(async (value) => {
+          this.plugin.settings.calendarFilesPath = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Auto-Create Calendar Files')
+      .setDesc('Automatically create daily kanban files when accessing Calendar Tasks view')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoCreateCalendarFiles)
+        .onChange(async (value) => {
+          this.plugin.settings.autoCreateCalendarFiles = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    // Schedule Management
+    new Setting(containerEl)
+      .setName('Schedule Management')
+      .setHeading();
+
+    // Current Schedule Selection
+    new Setting(containerEl)
+      .setName('Current Schedule')
+      .setDesc('Select the active schedule to use')
+      .addDropdown(dropdown => {
+        // Populate with all available schedules
+        this.plugin.settings.schedules.forEach(schedule => {
+          dropdown.addOption(schedule.id, schedule.name);
+        });
+        dropdown.setValue(this.plugin.settings.currentScheduleId);
+        dropdown.onChange(async (value: string) => {
+          this.plugin.settings.currentScheduleId = value;
+          await this.plugin.saveSettings();
+          this.plugin.resetTimer();
+          
+          // Refresh the settings to show the selected schedule's details
+          this.display();
+        });
+      });
+
+    // Display current schedule info and management
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    const scheduleInfoEl = containerEl.createDiv();
+    scheduleInfoEl.createEl('h3', { text: `Current Schedule: ${currentSchedule.name}` });
+    
+    if (currentSchedule.phases && currentSchedule.phases.length > 0) {
+      // Custom sequence display
+      const phasesList = scheduleInfoEl.createEl('ul');
+      currentSchedule.phases.forEach((phase, index) => {
+        const phaseItem = phasesList.createEl('li');
+        phaseItem.setText(`${index + 1}. ${phase.name || phase.type}: ${phase.duration} min`);
+      });
+    } else {
+      // Legacy schedule display
+      const legacyInfo = scheduleInfoEl.createEl('p');
+      legacyInfo.setText(`Work: ${currentSchedule.workDuration}min, Short Break: ${currentSchedule.shortBreakDuration}min, Long Break: ${currentSchedule.longBreakDuration}min`);
+    }
+
+    // Add new schedule button
+    new Setting(containerEl)
+      .setName('Add New Schedule')
+      .setDesc('Create a new custom schedule with phases')
+      .addButton(button => button
+        .setButtonText('Add Schedule')
+        .onClick(async () => {
+          const scheduleName = await this.showScheduleNameDialog();
+          if (scheduleName) {
+            await this.addNewSchedule(scheduleName);
+            this.display(); // Refresh settings
+          }
+        })
+      );
+
+    // Edit/Delete current schedule (not the default one)
+    if (currentSchedule.id !== 'default') {
+      const editDeleteContainer = containerEl.createDiv();
+      editDeleteContainer.style.display = 'flex';
+      editDeleteContainer.style.gap = '10px';
+      editDeleteContainer.style.marginTop = '10px';
+
+      const editButton = editDeleteContainer.createEl('button');
+      editButton.textContent = 'Edit Schedule';
+      editButton.onclick = async () => {
+        await this.editSchedule(currentSchedule.id);
+        this.display(); // Refresh settings
+      };
+
+      const deleteButton = editDeleteContainer.createEl('button');
+      deleteButton.textContent = 'Delete Schedule';
+      deleteButton.style.color = 'red';
+      deleteButton.onclick = async () => {
+        const confirmed = await this.showConfirmDialog(`Delete schedule "${currentSchedule.name}"?`);
+        if (confirmed) {
+          await this.plugin.deleteSchedule(currentSchedule.id);
+          this.display(); // Refresh settings
+        }
+      };
+    }
+
     // Sound Settings with Preview
     new Setting(containerEl)
       .setName('Break Sounds')
@@ -1891,5 +2293,484 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
           this.plugin.playSound('ding');
         })
       );
+  }
+
+  // Helper methods for schedule management
+  private async showScheduleNameDialog(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const modal = new ScheduleNameModal(this.app, (name: string) => {
+        resolve(name);
+      }, () => {
+        resolve(null);
+      });
+      modal.open();
+    });
+  }
+
+  private async addNewSchedule(name: string): Promise<void> {
+    const newSchedule: Omit<TimeSchedule, 'id'> = {
+      name: name,
+      phases: [
+        { type: 'work', duration: 25, name: 'Work' },
+        { type: 'shortBreak', duration: 5, name: 'Short Break' },
+        { type: 'work', duration: 25, name: 'Work' },
+        { type: 'shortBreak', duration: 5, name: 'Short Break' },
+        { type: 'work', duration: 25, name: 'Work' },
+        { type: 'shortBreak', duration: 5, name: 'Short Break' },
+        { type: 'work', duration: 25, name: 'Work' },
+        { type: 'longBreak', duration: 15, name: 'Long Break' }
+      ],
+      autoStartNext: false,
+      enableQuickBreak: true,
+      quickBreakDuration: 3,
+      quickBreakSound: 'ding'
+    };
+
+    const created = await this.plugin.addSchedule(newSchedule);
+    await this.plugin.switchSchedule(created.id);
+    new Notice(`Schedule "${name}" created successfully`);
+  }
+
+  private async editSchedule(scheduleId: string): Promise<void> {
+    const schedule = this.plugin.getSchedule(scheduleId);
+    if (!schedule) return;
+
+    const modal = new ScheduleEditModal(this.app, schedule, async (updatedSchedule) => {
+      await this.plugin.updateSchedule(updatedSchedule.id, updatedSchedule);
+      new Notice(`Schedule "${updatedSchedule.name}" updated successfully`);
+    });
+    modal.open();
+  }
+
+  private async showConfirmDialog(message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new ConfirmModal(this.app, message, () => {
+        resolve(true);
+      }, () => {
+        resolve(false);
+      });
+      modal.open();
+    });
+  }
+
+  openProgressColumnConfig() {
+    const modal = new ProgressColumnConfigModal(this.app, this.plugin);
+    modal.open();
+  }
+}
+
+// Modal classes for schedule management
+class ScheduleNameModal extends Modal {
+  private resolve: (name: string) => void;
+  private reject: () => void;
+  private inputEl!: HTMLInputElement;
+
+  constructor(app: App, onSubmit: (name: string) => void, onCancel: () => void) {
+    super(app);
+    this.resolve = onSubmit;
+    this.reject = onCancel;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: 'New Schedule Name' });
+
+    const inputContainer = contentEl.createDiv();
+    this.inputEl = inputContainer.createEl('input', {
+      type: 'text',
+      placeholder: 'Enter schedule name...'
+    });
+    this.inputEl.style.width = '100%';
+    this.inputEl.style.marginBottom = '1em';
+
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '10px';
+    buttonContainer.style.justifyContent = 'flex-end';
+
+    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
+    cancelButton.onclick = () => {
+      this.reject();
+      this.close();
+    };
+
+    const createButton = buttonContainer.createEl('button', { text: 'Create' });
+    createButton.onclick = () => {
+      const name = this.inputEl.value.trim();
+      if (name) {
+        this.resolve(name);
+        this.close();
+      } else {
+        new Notice('Please enter a schedule name');
+      }
+    };
+
+    // Focus input and allow Enter key
+    this.inputEl.focus();
+    this.inputEl.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        createButton.click();
+      }
+    });
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+class ScheduleEditModal extends Modal {
+  private schedule: TimeSchedule;
+  private resolve: (schedule: TimeSchedule) => void;
+  private phasesContainer!: HTMLElement;
+
+  constructor(app: App, schedule: TimeSchedule, onSubmit: (schedule: TimeSchedule) => void) {
+    super(app);
+    this.schedule = { ...schedule }; // Create a copy
+    this.resolve = onSubmit;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: `Edit Schedule: ${this.schedule.name}` });
+
+    // Schedule name
+    new Setting(contentEl)
+      .setName('Schedule Name')
+      .addText(text => text
+        .setPlaceholder('Schedule name')
+        .setValue(this.schedule.name)
+        .onChange(async (value) => {
+          this.schedule.name = value;
+        })
+      );
+
+    // Schedule type toggle
+    new Setting(contentEl)
+      .setName('Schedule Type')
+      .setDesc('Choose between legacy simple schedule or custom phase sequence')
+      .addDropdown(dropdown => {
+        dropdown
+          .addOption('legacy', 'Legacy (Work/Short/Long)')
+          .addOption('custom', 'Custom Phases');
+        
+        const isCustom = this.schedule.phases && this.schedule.phases.length > 0;
+        dropdown.setValue(isCustom ? 'custom' : 'legacy');
+        
+        dropdown.onChange(async (value) => {
+          if (value === 'custom') {
+            // Convert to custom if not already
+            if (!this.schedule.phases || this.schedule.phases.length === 0) {
+              this.schedule.phases = [
+                { type: 'work', duration: this.schedule.workDuration || 25, name: 'Work' },
+                { type: 'shortBreak', duration: this.schedule.shortBreakDuration || 5, name: 'Short Break' },
+                { type: 'work', duration: this.schedule.workDuration || 25, name: 'Work' },
+                { type: 'shortBreak', duration: this.schedule.shortBreakDuration || 5, name: 'Short Break' },
+                { type: 'work', duration: this.schedule.workDuration || 25, name: 'Work' },
+                { type: 'shortBreak', duration: this.schedule.shortBreakDuration || 5, name: 'Short Break' },
+                { type: 'work', duration: this.schedule.workDuration || 25, name: 'Work' },
+                { type: 'longBreak', duration: this.schedule.longBreakDuration || 15, name: 'Long Break' }
+              ];
+            }
+          } else {
+            // Convert to legacy
+            this.schedule.phases = undefined;
+          }
+          this.renderPhasesSection();
+        });
+      });
+
+    // Legacy settings (shown only when not using custom phases)
+    const legacyContainer = contentEl.createDiv();
+    legacyContainer.id = 'legacy-settings';
+    
+    new Setting(legacyContainer)
+      .setName('Work Duration (minutes)')
+      .addSlider(slider => slider
+        .setLimits(1, 60, 1)
+        .setValue(this.schedule.workDuration || 25)
+        .onChange(async (value) => {
+          this.schedule.workDuration = value;
+        })
+      );
+
+    new Setting(legacyContainer)
+      .setName('Short Break Duration (minutes)')
+      .addSlider(slider => slider
+        .setLimits(1, 30, 1)
+        .setValue(this.schedule.shortBreakDuration || 5)
+        .onChange(async (value) => {
+          this.schedule.shortBreakDuration = value;
+        })
+      );
+
+    new Setting(legacyContainer)
+      .setName('Long Break Duration (minutes)')
+      .addSlider(slider => slider
+        .setLimits(1, 60, 1)
+        .setValue(this.schedule.longBreakDuration || 15)
+        .onChange(async (value) => {
+          this.schedule.longBreakDuration = value;
+        })
+      );
+
+    // Custom phases section
+    this.phasesContainer = contentEl.createDiv();
+    this.phasesContainer.id = 'custom-phases';
+    
+    // Common settings
+    new Setting(contentEl)
+      .setName('Auto-start Next Session')
+      .setDesc('Automatically start the next session after completion')
+      .addToggle(toggle => toggle
+        .setValue(this.schedule.autoStartNext)
+        .onChange(async (value) => {
+          this.schedule.autoStartNext = value;
+        })
+      );
+
+    // Buttons
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '10px';
+    buttonContainer.style.justifyContent = 'flex-end';
+    buttonContainer.style.marginTop = '1em';
+
+    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
+    cancelButton.onclick = () => {
+      this.close();
+    };
+
+    const saveButton = buttonContainer.createEl('button', { text: 'Save' });
+    saveButton.onclick = () => {
+      if (!this.schedule.name.trim()) {
+        new Notice('Schedule name cannot be empty');
+        return;
+      }
+      this.resolve(this.schedule);
+      this.close();
+    };
+
+    // Initial render
+    this.renderPhasesSection();
+  }
+
+  private renderPhasesSection() {
+    this.phasesContainer.empty();
+    
+    const isCustom = this.schedule.phases && this.schedule.phases.length > 0;
+    const legacyEl = document.getElementById('legacy-settings');
+    const phasesEl = this.phasesContainer;
+    
+    if (legacyEl) {
+      legacyEl.style.display = isCustom ? 'none' : 'block';
+    }
+    phasesEl.style.display = isCustom ? 'block' : 'none';
+
+    if (isCustom) {
+      phasesEl.createEl('h3', { text: 'Custom Phases' });
+      
+      const phasesList = phasesEl.createDiv();
+      phasesList.style.marginBottom = '1em';
+
+      this.schedule.phases!.forEach((phase, index) => {
+        const phaseContainer = phasesList.createDiv();
+        phaseContainer.style.display = 'flex';
+        phaseContainer.style.alignItems = 'center';
+        phaseContainer.style.gap = '10px';
+        phaseContainer.style.marginBottom = '5px';
+
+        // Phase number
+        phaseContainer.createSpan({ text: `${index + 1}.` });
+
+        // Phase type
+        const typeDropdown = phaseContainer.createEl('select');
+        ['work', 'shortBreak', 'longBreak'].forEach(type => {
+          const option = typeDropdown.createEl('option', { 
+            text: type === 'work' ? 'Work' : type === 'shortBreak' ? 'Short Break' : 'Long Break',
+            value: type
+          });
+          if (phase.type === type) {
+            option.selected = true;
+          }
+        });
+        typeDropdown.onchange = () => {
+          phase.type = typeDropdown.value as 'work' | 'shortBreak' | 'longBreak';
+        };
+
+        // Duration
+        const durationInput = phaseContainer.createEl('input', { type: 'number' });
+        durationInput.value = phase.duration.toString();
+        durationInput.min = '1';
+        durationInput.max = '120';
+        durationInput.style.width = '60px';
+        durationInput.onchange = () => {
+          phase.duration = parseInt(durationInput.value) || 25;
+        };
+
+        phaseContainer.createSpan({ text: 'min' });
+
+        // Custom name
+        const nameInput = phaseContainer.createEl('input', { type: 'text' });
+        nameInput.value = phase.name || '';
+        nameInput.placeholder = 'Custom name (optional)';
+        nameInput.style.flex = '1';
+        nameInput.onchange = () => {
+          phase.name = nameInput.value || undefined;
+        };
+
+        // Remove button
+        if (this.schedule.phases!.length > 1) {
+          const removeButton = phaseContainer.createEl('button', { text: '×' });
+          removeButton.style.color = 'red';
+          removeButton.style.padding = '0 5px';
+          removeButton.onclick = () => {
+            this.schedule.phases!.splice(index, 1);
+            this.renderPhasesSection();
+          };
+        }
+      });
+
+      // Add phase button
+      const addButton = phasesList.createEl('button', { text: 'Add Phase' });
+      addButton.onclick = () => {
+        this.schedule.phases!.push({ 
+          type: 'work', 
+          duration: 25, 
+          name: 'Work' 
+        });
+        this.renderPhasesSection();
+      };
+    }
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+class ConfirmModal extends Modal {
+  private message: string;
+  private resolve: (confirmed: boolean) => void;
+
+  constructor(app: App, message: string, onConfirm: () => void, onCancel: () => void) {
+    super(app);
+    this.message = message;
+    this.resolve = (confirmed: boolean) => {
+      if (confirmed) {
+        onConfirm();
+      } else {
+        onCancel();
+      }
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: 'Confirm' });
+    contentEl.createEl('p', { text: this.message });
+
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '10px';
+    buttonContainer.style.justifyContent = 'flex-end';
+    buttonContainer.style.marginTop = '1em';
+
+    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
+    cancelButton.onclick = () => {
+      this.resolve(false);
+      this.close();
+    };
+
+    const confirmButton = buttonContainer.createEl('button', { text: 'Confirm' });
+    confirmButton.style.color = 'red';
+    confirmButton.onclick = () => {
+      this.resolve(true);
+      this.close();
+    };
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+class ProgressColumnConfigModal extends Modal {
+  plugin: EnhancedPomodoro;
+
+  constructor(app: App, plugin: EnhancedPomodoro) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    contentEl.createEl('h2', { text: 'Progress Column Configuration' });
+    contentEl.createEl('p', { 
+      text: 'Configure which column to use as the "In Progress" column for each kanban board. This helps when boards have multiple progress-like columns.' 
+    });
+
+    const container = contentEl.createDiv('progress-column-config');
+
+    // Get all kanban files
+    const kanbanFiles = Object.keys(this.plugin.settings.perBoardProgressColumns || {});
+    
+    if (kanbanFiles.length === 0) {
+      const emptyState = container.createDiv('empty-state');
+      emptyState.createEl('p', { text: 'No kanban boards configured yet. Use kanban boards first to set up progress column preferences.' });
+    } else {
+      kanbanFiles.forEach(boardPath => {
+        const boardSetting = new Setting(container)
+          .setName(boardPath)
+          .setDesc('Progress column for this board')
+          .addText(text => text
+            .setPlaceholder('In Progress')
+            .setValue(this.plugin.settings.perBoardProgressColumns[boardPath] || '')
+            .onChange(async (value) => {
+              this.plugin.settings.perBoardProgressColumns[boardPath] = value;
+              await this.plugin.saveSettings();
+            })
+          );
+
+        // Add remove button
+        boardSetting.addButton(button => button
+          .setButtonText('Remove')
+          .setWarning()
+          .onClick(async () => {
+            delete this.plugin.settings.perBoardProgressColumns[boardPath];
+            await this.plugin.saveSettings();
+            this.onOpen(); // Refresh modal
+          })
+        );
+      });
+    }
+
+    // Add instructions
+    const instructions = contentEl.createDiv('instructions');
+    instructions.createEl('h3', { text: 'How to use:' });
+    instructions.createEl('ol', {}, ol => {
+      ol.createEl('li', { text: 'Use kanban boards with multiple progress columns' });
+      ol.createEl('li', { text: 'When prompted, select your preferred progress column' });
+      ol.createEl('li', { text: 'Or configure manually here' });
+      ol.createEl('li', { text: 'The plugin will remember your choice for each board' });
+    });
+
+    // Close button
+    const buttonContainer = contentEl.createDiv('modal-button-container');
+    buttonContainer.style.marginTop = '20px';
+    buttonContainer.style.textAlign = 'right';
+
+    const closeButton = buttonContainer.createEl('button', { text: 'Close' });
+    closeButton.onclick = () => this.close();
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
   }
 }

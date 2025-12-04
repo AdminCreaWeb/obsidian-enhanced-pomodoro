@@ -1,31 +1,58 @@
 import { ItemView, TFile, WorkspaceLeaf, Notice } from 'obsidian';
+import EnhancedPomodoro from './main';
 
 export const CIRCULAR_TIMER_VIEW = 'circular-timer-view';
 
-export class CircularTimerView extends ItemView {
+export default class CircularTimerView extends ItemView {
+  plugin: EnhancedPomodoro;
+  svgElement!: SVGSVGElement;
+  progressCircle!: SVGCircleElement;
+  timeSpan!: HTMLSpanElement;
+  modeSpan!: HTMLSpanElement;
+  tasksContainer: HTMLElement | null = null;
+  
+  // Task tracking
+  taskTimers: Map<string, number> = new Map();
+  taskTimersByText: Map<string, number> = new Map();
+  taskOriginalColumns: Map<string, string> = new Map(); // Track original column per task
+  activeTaskId: string | null = null;
+  currentTaskElement: HTMLElement | null = null;
+  lastUpdateTime: number = Date.now();
+  animationFrameId: number | null = null;
+  
+  // Kanban board tracking
+  kanbanBoards: Map<string, TFile> = new Map();
+  currentKanbanFile: TFile | null = null;
+  lastKanbanUpdateTime: number = 0;
+  
+  // Quick break button reference
+  quickBreakButton: HTMLElement | null = null;
+  
+  // Container reference
+  container: HTMLElement | null = null;
+
+  // Button references
+  private playBtn: HTMLElement | null = null;
+  private settingsBtn: HTMLElement | null = null;
+  private resetBtn: HTMLElement | null = null;
+  private endCycleBtn: HTMLElement | null = null;
+
   private kanbanSelector: HTMLSelectElement | null = null;
-  private tasksContainer: HTMLElement | null = null;
   private refreshButton: HTMLButtonElement | null = null;
+  private openFileButton: HTMLButtonElement | null = null;
   private warningElement: HTMLElement | null = null;
   private warningTimeout: number | null = null;
-  private quickBreakButton: HTMLElement | null = null;
-
-  private modeSpan!: HTMLSpanElement;
-  private timeSpan!: HTMLSpanElement;
-  private progressCircle!: SVGCircleElement;
-  private playBtn!: HTMLElement;
-  private svgElement!: SVGSVGElement;
+  private isDragging: boolean = false;
+  private dragTarget: 'start' | 'end' | null = null;
+  private snapIndicators: SVGCircleElement[] = [];
   private debugStartDot!: SVGCircleElement;
   private debugEndDot!: SVGCircleElement;
   private startHitArea!: SVGCircleElement;
   private endHitArea!: SVGCircleElement;
-  private isDragging: boolean = false;
-  private dragTarget: 'start' | 'end' | null = null;
-  private snapIndicators: SVGCircleElement[] = [];
-  private animationFrameId: number | null = null;
 
-  constructor(leaf: WorkspaceLeaf, private plugin: any) {
+  constructor(leaf: WorkspaceLeaf, plugin: EnhancedPomodoro) {
     super(leaf);
+    this.plugin = plugin;
   }
 
   private async updateTaskCompletionState(taskId: string, completed: boolean) {
@@ -96,12 +123,15 @@ export class CircularTimerView extends ItemView {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     
+    // Store container reference
+    this.container = this.containerEl.children[1] as HTMLElement;
+    
     // Create main container with flex column layout
     container.style.display = 'flex';
     container.style.flexDirection = 'column';
     container.style.height = '100%';
     
-    // Create timer container (no duplicate header - Obsidian provides one)
+    // Create timer container
     const timerContainer = container.createDiv('pomodoro-timer-container');
     
     // Create SVG container
@@ -124,9 +154,81 @@ export class CircularTimerView extends ItemView {
     const controls = container.createDiv('pomodoro-controls');
     
     // Add tasks container BEFORE selector (needed for loadKanbanTasks)
-    this.tasksContainer = container.createDiv('pomodoro-tasks');
+    // Create sidebar container with tabs
+    const sidebarContainer = container.createDiv('pomodoro-sidebar');
+    sidebarContainer.style.flexGrow = '1';
+    sidebarContainer.style.display = 'flex';
+    sidebarContainer.style.flexDirection = 'column';
+    
+    // Create tabs
+    const tabsContainer = sidebarContainer.createDiv('sidebar-tabs');
+    tabsContainer.style.display = 'flex';
+    tabsContainer.style.borderBottom = '1px solid var(--background-modifier-border)';
+    
+    const miniCalendarTab = tabsContainer.createDiv('sidebar-tab');
+    miniCalendarTab.setAttribute('data-tab', 'mini-calendar');
+    miniCalendarTab.createSpan({ text: '📅 Mini Calendar' });
+    miniCalendarTab.onclick = () => this.switchSidebarView('mini-calendar');
+    
+    const calendarTasksTab = tabsContainer.createDiv('sidebar-tab');
+    calendarTasksTab.setAttribute('data-tab', 'calendar-tasks');
+    calendarTasksTab.createSpan({ text: '📋 Calendar Tasks' });
+    calendarTasksTab.onclick = () => this.switchSidebarView('calendar-tasks');
+    
+    const manualTab = tabsContainer.createDiv('sidebar-tab');
+    manualTab.setAttribute('data-tab', 'manual');
+    manualTab.createSpan({ text: '📝 Manual Kanban' });
+    manualTab.onclick = () => this.switchSidebarView('manual');
+    
+    // Create content areas
+    const contentContainer = sidebarContainer.createDiv('sidebar-content-container');
+    contentContainer.style.flexGrow = '1';
+    contentContainer.style.position = 'relative';
+    
+    // Mini Calendar content area
+    const miniCalendarContent = contentContainer.createDiv('sidebar-content');
+    miniCalendarContent.setAttribute('data-content', 'mini-calendar');
+    miniCalendarContent.style.position = 'absolute';
+    miniCalendarContent.style.top = '0';
+    miniCalendarContent.style.left = '0';
+    miniCalendarContent.style.right = '0';
+    miniCalendarContent.style.bottom = '0';
+    miniCalendarContent.style.overflow = 'auto';
+    
+    // Calendar Tasks content area
+    const calendarTasksContent = contentContainer.createDiv('sidebar-content');
+    calendarTasksContent.setAttribute('data-content', 'calendar-tasks');
+    calendarTasksContent.style.position = 'absolute';
+    calendarTasksContent.style.top = '0';
+    calendarTasksContent.style.left = '0';
+    calendarTasksContent.style.right = '0';
+    calendarTasksContent.style.bottom = '0';
+    calendarTasksContent.style.overflow = 'auto';
+    
+    // Manual content area (original tasks)
+    const manualContent = contentContainer.createDiv('sidebar-content');
+    manualContent.setAttribute('data-content', 'manual');
+    manualContent.style.position = 'absolute';
+    manualContent.style.top = '0';
+    manualContent.style.left = '0';
+    manualContent.style.right = '0';
+    manualContent.style.bottom = '0';
+    manualContent.style.overflow = 'auto';
+    
+    // Move tasks container to manual content
+    this.tasksContainer = manualContent.createDiv('pomodoro-tasks');
     this.tasksContainer.style.flexGrow = '1';
     this.tasksContainer.style.overflowY = 'auto';
+    
+    // Initialize with default view - use Calendar Tasks if no manual kanban selected
+    let defaultView = this.plugin.settings.sidebarView;
+    
+    // If no manual kanban file is selected, default to Calendar Tasks
+    if (!this.plugin.settings.kanbanBoardPath && defaultView === 'manual') {
+      defaultView = 'calendar-tasks';
+    }
+    
+    this.switchSidebarView(defaultView || 'calendar-tasks');
     
     // Add Kanban board selector (after tasksContainer exists)
     await this.addKanbanBoardSelector(controls);
@@ -136,6 +238,9 @@ export class CircularTimerView extends ItemView {
     
     // Add styles
     this.addStyles();
+    
+    // Add responsive layout handler
+    this.setupResponsiveLayout();
     
     // Start the animation loop
     this.animate();
@@ -155,8 +260,553 @@ export class CircularTimerView extends ItemView {
     }, 500);
   }
   
+  // Button style management
+  updateButtonStyle() {
+    if (!this.container) return;
+    
+    const buttonStyle = this.plugin.settings.buttonStyle;
+    const buttons = this.container.querySelectorAll('.control-button');
+    
+    buttons.forEach(button => {
+      const buttonEl = button as HTMLElement;
+      const icon = buttonEl.querySelector('.control-icon');
+      const text = buttonEl.querySelector('.control-text');
+      
+      if (buttonStyle === 'icons+text') {
+        if (icon) (icon as HTMLElement).style.display = '';
+        if (text) (text as HTMLElement).style.display = '';
+      } else if (buttonStyle === 'text') {
+        if (icon) (icon as HTMLElement).style.display = 'none';
+        if (text) (text as HTMLElement).style.display = '';
+      } else if (buttonStyle === 'icons') {
+        if (icon) (icon as HTMLElement).style.display = '';
+        if (text) (text as HTMLElement).style.display = 'none';
+      }
+    });
+    
+    this.updateButtonTooltips();
+  }
+
+  updateButtonTooltips() {
+    if (!this.container) return;
+    
+    const showTooltips = this.plugin.settings.showButtonTooltips;
+    const buttonStyle = this.plugin.settings.buttonStyle;
+    const buttons = this.container.querySelectorAll('.control-button');
+    
+    buttons.forEach(button => {
+      const buttonEl = button as HTMLElement;
+      
+      if (buttonStyle === 'icons' && showTooltips) {
+        // Show tooltips only in icons-only mode when enabled
+        buttonEl.classList.add('has-tooltip');
+      } else {
+        buttonEl.classList.remove('has-tooltip');
+      }
+    });
+  }
+
+  private updateTaskContextDisplay() {
+    const taskContextDiv = this.container?.querySelector('.task-context-display') as HTMLElement;
+    if (!taskContextDiv) return;
+    
+    const currentView = this.plugin.settings.sidebarView;
+    let contextText = '';
+    
+    switch (this.plugin.settings.sidebarView) {
+      case 'mini-calendar':
+        contextText = 'Mini Calendar View';
+        break;
+      case 'calendar-tasks':
+        contextText = 'Calendar Tasks View';
+        break;
+      case 'manual':
+        if (this.plugin.settings.kanbanBoardPath) {
+          const boardName = this.plugin.settings.kanbanBoardPath.split('/').pop()?.replace('.md', '') || 'Unknown';
+          contextText = `Manual: ${boardName}`;
+        } else {
+          contextText = 'Manual: No Board Selected';
+        }
+        break;
+    }
+    
+    taskContextDiv.textContent = contextText;
+  }
+
+  private setupResponsiveLayout() {
+    if (!this.container) return;
+    
+    const checkWidth = () => {
+      if (!this.plugin.settings.responsiveButtons || !this.container) return;
+      
+      const sidebarWidth = this.container.clientWidth;
+      const shouldUseIconsOnly = sidebarWidth < 575;
+      
+      // Update all button styles based on width
+      const buttons = this.container.querySelectorAll('.control-button');
+      buttons.forEach(button => {
+        const buttonEl = button as HTMLElement;
+        const iconEl = buttonEl.querySelector('.control-icon') as HTMLElement;
+        const textEl = buttonEl.querySelector('.control-text') as HTMLElement;
+        
+        if (shouldUseIconsOnly) {
+          // Icons only mode
+          if (iconEl) iconEl.style.display = 'block';
+          if (textEl) textEl.style.display = 'none';
+          buttonEl.classList.add('icons-only');
+        } else {
+          // Normal mode (based on settings)
+          const currentStyle = this.plugin.settings.buttonStyle;
+          if (currentStyle === 'icons') {
+            if (iconEl) iconEl.style.display = 'block';
+            if (textEl) textEl.style.display = 'none';
+            buttonEl.classList.add('icons-only');
+          } else if (currentStyle === 'text') {
+            if (iconEl) iconEl.style.display = 'none';
+            if (textEl) textEl.style.display = 'block';
+            buttonEl.classList.remove('icons-only');
+          } else {
+            if (iconEl) iconEl.style.display = 'block';
+            if (textEl) textEl.style.display = 'block';
+            buttonEl.classList.remove('icons-only');
+          }
+        }
+      });
+    };
+    
+    // Initial check
+    checkWidth();
+    
+    // Add resize observer
+    const resizeObserver = new ResizeObserver(checkWidth);
+    resizeObserver.observe(this.container);
+    
+    // Store observer for cleanup
+    (this as any).resizeObserver = resizeObserver;
+  }
+
+  updateResponsiveLayout() {
+    this.setupResponsiveLayout();
+  }
+
+  private isToday(date: Date): boolean {
+    const today = new Date();
+    return date.getDate() === today.getDate() &&
+           date.getMonth() === today.getMonth() &&
+           date.getFullYear() === today.getFullYear();
+  }
+
+  // Sidebar view management
+  switchSidebarView(view: 'mini-calendar' | 'calendar-tasks' | 'manual') {
+    if (!this.container) return;
+    
+    const miniCalendarTab = this.container.querySelector('.sidebar-tab[data-tab="mini-calendar"]');
+    const calendarTasksTab = this.container.querySelector('.sidebar-tab[data-tab="calendar-tasks"]');
+    const manualTab = this.container.querySelector('.sidebar-tab[data-tab="manual"]');
+    const miniCalendarContent = this.container.querySelector('.sidebar-content[data-content="mini-calendar"]');
+    const calendarTasksContent = this.container.querySelector('.sidebar-content[data-content="calendar-tasks"]');
+    const manualContent = this.container.querySelector('.sidebar-content[data-content="manual"]');
+    
+    // Update tab active states
+    if (miniCalendarTab && calendarTasksTab && manualTab) {
+      // Remove active class from all tabs
+      miniCalendarTab.classList.remove('active');
+      calendarTasksTab.classList.remove('active');
+      manualTab.classList.remove('active');
+      
+      // Add active class to selected tab
+      if (view === 'mini-calendar') {
+        miniCalendarTab.classList.add('active');
+      } else if (view === 'calendar-tasks') {
+        calendarTasksTab.classList.add('active');
+      } else {
+        manualTab.classList.add('active');
+      }
+    }
+    
+    // Update content visibility
+    if (miniCalendarContent && calendarTasksContent && manualContent) {
+      // Hide all content
+      (miniCalendarContent as HTMLElement).style.display = 'none';
+      (calendarTasksContent as HTMLElement).style.display = 'none';
+      (manualContent as HTMLElement).style.display = 'none';
+      
+      // Show selected content
+      if (view === 'mini-calendar') {
+        (miniCalendarContent as HTMLElement).style.display = 'block';
+      } else if (view === 'calendar-tasks') {
+        (calendarTasksContent as HTMLElement).style.display = 'block';
+      } else {
+        (manualContent as HTMLElement).style.display = 'block';
+      }
+    }
+    
+    // Load content based on selected view
+    if (view === 'mini-calendar') {
+      this.loadMiniCalendarView();
+    } else if (view === 'calendar-tasks') {
+      this.loadCalendarTasksView();
+    }
+    
+    // Update task context display
+    this.updateTaskContextDisplay();
+  }
+
+  private loadMiniCalendarView() {
+    const miniCalendarContent = this.container?.querySelector('.sidebar-content[data-content="mini-calendar"]') as HTMLElement;
+    if (!miniCalendarContent) return;
+    
+    // Clear existing content
+    miniCalendarContent.empty();
+    
+    // Create mini calendar
+    const miniCalendar = miniCalendarContent.createDiv('mini-calendar');
+    this.createMiniCalendar(miniCalendar);
+  }
+
+  private loadCalendarTasksView() {
+    const calendarTasksContent = this.container?.querySelector('.sidebar-content[data-content="calendar-tasks"]') as HTMLElement;
+    if (!calendarTasksContent) return;
+    
+    // Clear existing content
+    calendarTasksContent.empty();
+    
+    // Get today's date and check if daily kanban file exists
+    const today = new Date();
+    const dailyNotePath = this.getDailyNotePath(today);
+    
+    // Check if file exists first
+    const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
+    if (file instanceof TFile) {
+      // File exists, load tasks
+      this.app.vault.read(file).then(content => {
+        // Create today's tasks section
+        const todayTasks = calendarTasksContent.createDiv('today-tasks');
+        todayTasks.createEl('h3', { text: 'Today' });
+        
+        const tasksList = todayTasks.createDiv('kanban-style-tasks');
+        this.displayKanbanTasks(tasksList, content, dailyNotePath);
+      }).catch(err => {
+        console.error('[CALENDAR] Failed to read daily kanban file:', err);
+        calendarTasksContent.createEl('p', { text: 'Failed to load today\'s tasks', cls: 'error-message' });
+      });
+    } else {
+      // File doesn't exist, show empty state with creation option
+      const emptyState = calendarTasksContent.createDiv('empty-state');
+      emptyState.createEl('p', { 
+        text: 'No daily kanban file for today. Click "Create Today\'s Kanban" to get started.',
+        cls: 'empty-state-message'
+      });
+      
+      const createButton = emptyState.createEl('button', {
+        text: 'Create Today\'s Kanban',
+        cls: 'mod-cta'
+      });
+      
+      createButton.onclick = async () => {
+        await this.createDailyKanbanFile(today);
+        // Reload the view after creation
+        this.loadCalendarTasksView();
+      };
+    }
+  }
+
+  private getDailyNotePath(date: Date): string {
+    // Use YYYYMMDD format for filename
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}${month}${day}`;
+    
+    const settingsPath = this.plugin.settings.calendarFilesPath || 'Daily Notes';
+    return `${settingsPath}/${dateStr}_daily_notes_kanban.md`;
+  }
+
+  private async createDailyKanbanFile(date: Date): Promise<void> {
+    const dailyNotePath = this.getDailyNotePath(date);
+    
+    try {
+      // Check if file already exists
+      const existingFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
+      if (existingFile instanceof TFile) {
+        console.log('[CALENDAR] Daily kanban file already exists:', dailyNotePath);
+        return;
+      }
+      
+      // Create the kanban file with proper structure
+      const formattedDate = date.toLocaleDateString('en-US', { 
+        month: 'long', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+      
+      const content = `---
+kanban-plugin: board
+---
+
+## 📋 To Do
+
+
+
+## 🚧 In Progress
+
+
+
+## ✅ Done
+
+
+
+
+
+%% kanban:settings
+\`\`\`
+{"kanban-plugin":"board"}
+\`\`\`
+%%
+`;
+      
+      // Create the file at the path returned by getDailyNotePath (consistent with existence check)
+      await this.app.vault.create(dailyNotePath, content);
+      console.log('[CALENDAR] Created daily kanban file:', dailyNotePath);
+      
+      // Refresh kanban boards list and load the new file
+      await this.loadKanbanBoards();
+      
+      // Select and load the new file in the dropdown
+      if (this.kanbanSelector) {
+        this.kanbanSelector.value = dailyNotePath;
+        this.plugin.settings.kanbanBoardPath = dailyNotePath;
+        await this.plugin.saveSettings();
+        await this.loadKanbanTasks(dailyNotePath);
+        
+        // Update open file button state
+        if (this.openFileButton) {
+          this.openFileButton.style.opacity = '1';
+          this.openFileButton.style.cursor = 'pointer';
+        }
+      }
+      
+      new Notice(`Created daily kanban: ${dailyNotePath.split('/').pop()}`);
+      
+    } catch (error) {
+      console.error('[CALENDAR] Failed to create daily kanban file:', error);
+      new Notice('Failed to create daily kanban file');
+    }
+  }
+
+  private loadCalendarView() {
+    const calendarContent = this.container?.querySelector('.sidebar-content[data-content="calendar"]') as HTMLElement;
+    if (!calendarContent) return;
+    
+    // Clear existing content
+    calendarContent.empty();
+    
+    // Create mini calendar
+    const miniCalendar = calendarContent.createDiv('mini-calendar');
+    this.createMiniCalendar(miniCalendar);
+    
+    // Create today's tasks section
+    const todayTasks = calendarContent.createDiv('today-tasks');
+    todayTasks.createEl('h3', { text: 'Today' });
+    
+    const tasksList = todayTasks.createDiv('kanban-style-tasks');
+    this.loadTodayTasks(tasksList);
+  }
+
+  private createMiniCalendar(container: HTMLElement) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const today = now.getDate();
+    
+    // Calendar header
+    const header = container.createDiv('calendar-header');
+    header.createEl('h4', { text: now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) });
+    
+    // Calendar grid
+    const grid = container.createDiv('calendar-grid');
+    
+    // Day headers
+    const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    dayHeaders.forEach(day => {
+      grid.createEl('div', { text: day, cls: 'calendar-day-header' });
+    });
+    
+    // Empty cells for days before month starts
+    const firstDay = new Date(year, month, 1).getDay();
+    for (let i = 0; i < firstDay; i++) {
+      grid.createDiv('calendar-day empty');
+    }
+    
+    // Days of the month
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayEl = grid.createDiv('calendar-day');
+      dayEl.textContent = day.toString();
+      
+      if (day === today) {
+        dayEl.classList.add('today');
+      }
+      
+      // Add click handler to navigate to daily note
+      dayEl.onclick = () => {
+        const date = new Date(year, month, day);
+        const dateStr = date.toISOString().split('T')[0];
+        const dailyNoteName = `Daily Note ${dateStr}`;
+        
+        // Try to find existing daily note or create new one
+        const file = this.app.vault.getAbstractFileByPath(dailyNoteName);
+        if (file instanceof TFile) {
+          this.app.workspace.getLeaf().openFile(file);
+        } else {
+          // Create new daily note
+          this.app.vault.create(dailyNoteName, `# ${dailyNoteName}\n\n## Tasks\n\n## Notes\n`);
+          const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
+          if (newFile instanceof TFile) {
+            this.app.workspace.getLeaf().openFile(newFile);
+          }
+        }
+      };
+    }
+  }
+
+  private loadTodayTasks(container: HTMLElement) {
+    // Get today's date and daily kanban file path
+    const today = new Date();
+    const dailyNotePath = this.getDailyNotePath(today);
+    
+    // Try to find today's daily kanban file
+    const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
+    if (file instanceof TFile) {
+      this.app.vault.read(file).then(content => {
+        // Parse kanban tasks from daily note
+        this.displayKanbanTasks(container, content, dailyNotePath);
+      }).catch(err => {
+        console.error('[CALENDAR] Failed to read daily kanban file:', err);
+        container.createEl('p', { text: 'Failed to load today\'s tasks', cls: 'error-message' });
+      });
+    } else {
+      // Create empty state
+      const emptyState = container.createDiv('empty-state');
+      emptyState.createEl('p', { text: 'No tasks for today. Click on a date in the mini calendar to create a daily note.' });
+    }
+  }
+
+  private displayKanbanTasks(container: HTMLElement, content: string, filePath: string) {
+    // Parse kanban columns
+    const columnRegex = /^## (.+)$/gm;
+    const columns: Array<{ title: string; tasks: Array<{ text: string; completed: boolean }> }> = [];
+    let match;
+    let currentColumn: { title: string; tasks: Array<{ text: string; completed: boolean }> } | null = null;
+    let currentSection = '';
+    
+    // Split content by lines
+    const lines = content.split('\n');
+    
+    for (const line of lines) {
+      // Check for column headers
+      const columnMatch = line.match(/^## (.+)$/);
+      if (columnMatch) {
+        // Save previous column if exists
+        if (currentColumn) {
+          columns.push(currentColumn);
+        }
+        // Start new column
+        currentColumn = {
+          title: columnMatch[1],
+          tasks: []
+        };
+        continue;
+      }
+      
+      // Check for tasks
+      const taskMatch = line.match(/^- \[([ x])\] (.+)$/);
+      if (taskMatch && currentColumn) {
+        const completed = taskMatch[1] === 'x';
+        const taskText = taskMatch[2];
+        
+        // Remove timer from task text if present
+        const cleanTaskText = taskText.replace(/ - 🍎 \d+:\d{2}$/, '').replace(/ - \d+:\d{2}$/, '');
+        
+        currentColumn.tasks.push({
+          text: cleanTaskText,
+          completed: completed
+        });
+      }
+    }
+    
+    // Save last column
+    if (currentColumn) {
+      columns.push(currentColumn);
+    }
+    
+    // Display columns
+    if (columns.length > 0) {
+      const columnsContainer = container.createDiv('kanban-columns');
+      
+      columns.forEach(column => {
+        const columnEl = columnsContainer.createDiv('kanban-column');
+        columnEl.createEl('h4', { text: column.title });
+        
+        const tasksList = columnEl.createDiv('column-tasks');
+        
+        if (column.tasks.length === 0) {
+          tasksList.createEl('p', { text: 'No tasks', cls: 'empty-column' });
+        } else {
+          column.tasks.forEach(task => {
+            const taskEl = tasksList.createDiv('kanban-task');
+            const checkbox = taskEl.createEl('input', { type: 'checkbox' });
+            checkbox.checked = task.completed;
+            
+            const taskTextEl = taskEl.createSpan('task-text');
+            taskTextEl.textContent = task.text;
+            
+            if (task.completed) {
+              taskEl.classList.add('completed');
+            }
+          });
+        }
+      });
+    } else {
+      container.createEl('p', { text: 'No tasks found for today.' });
+    }
+  }
+
+  // Helper method to create control buttons with consistent styling
+  private createControlButton(container: HTMLElement, options: {
+    icon: string;
+    text: string;
+    ariaLabel: string;
+    onClick: () => void;
+    disabled?: boolean;
+  }): HTMLElement {
+    const button = container.createEl('span', {
+      cls: `control-button ${options.disabled ? 'control-button-disabled' : ''}`,
+      attr: { 'aria-label': options.ariaLabel }
+    });
+
+    // Create icon element
+    const iconEl = button.createDiv('control-icon');
+    iconEl.innerHTML = options.icon;
+
+    // Create text element
+    const textEl = button.createDiv('control-text');
+    textEl.textContent = options.text;
+
+    // Add click handler
+    button.addEventListener('click', options.onClick);
+
+    return button;
+  }
+
   private initializeSvgElements() {
     const svgNS = 'http://www.w3.org/2000/svg';
+    
+    // Declare button variables for this function
+    let settingsBtn: HTMLElement;
+    let playBtn: HTMLElement;
+    let resetBtn: HTMLElement;
+    let endCycleBtn: HTMLElement;
     
     // Background circle (centered in viewBox)
     const bgCircle = document.createElementNS(svgNS, 'circle');
@@ -235,72 +885,101 @@ export class CircularTimerView extends ItemView {
       return;
     }
     
-    const btnGroup = timerContainer.createDiv({ cls: 'btn-group' });
+    // Add task context display between SVG and buttons
+    const taskContextDiv = timerContainer.createDiv('task-context-display');
+    this.updateTaskContextDisplay();
     
-    // Play/Pause button
-    const playBtn = btnGroup.createEl('span', { cls: 'control-icon' });
-    playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
-    playBtn.addEventListener('click', () => {
-      if (!this.plugin.isRunning) {
-        // If timer is at start, check current mode to decide which timer to start
-        if (this.plugin.timeRemaining === this.plugin.getTotalTime()) {
-          if (this.plugin.currentMode === 'work') {
-            this.plugin.startPomodoro();
+    // Create button group below the SVG
+    const btnGroup = timerContainer.createDiv({ cls: 'btn-group' });
+    const mainControls = btnGroup.createDiv({ cls: 'btn-group-main' });
+    const secondaryControls = btnGroup.createDiv({ cls: 'btn-group-secondary' });
+    
+    // Settings button (left)
+    settingsBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m4.22-13.22l4.24 4.24m-4.24 4.24l4.24 4.24M20 12h-6m-6 0H2m13.22 4.22l-4.24 4.24m-4.24-4.24l-4.24 4.24"></path></svg>',
+      text: 'Settings',
+      ariaLabel: 'Open Pomodoro Settings',
+      onClick: () => {
+        // Open settings tab for this plugin
+        (this.app as any).setting.open();
+        (this.app as any).setting.openTabById('enhanced-pomodoro');
+      }
+    });
+    
+    // Play/Pause button (center)
+    playBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
+      text: 'Play',
+      ariaLabel: 'Start/Pause Timer',
+      onClick: () => {
+        if (!this.plugin.isRunning) {
+          // If timer is at start, check current mode to decide which timer to start
+          if (this.plugin.timeRemaining === this.plugin.getTotalTime()) {
+            if (this.plugin.currentMode === 'work') {
+              this.plugin.startPomodoro();
+            } else {
+              // For breaks, just start the timer without changing the mode
+              this.plugin.isRunning = true;
+              this.plugin.startTimer();
+            }
           } else {
-            // For breaks, just start the timer without changing the mode
-            this.plugin.isRunning = true;
-            this.plugin.startTimer();
+            // Resume the current timer
+            this.plugin.togglePause();
           }
         } else {
-          // Resume the current timer
+          // If running, pause it
           this.plugin.togglePause();
         }
-      } else {
-        // If running, pause it
-        this.plugin.togglePause();
       }
     });
     
-    // Settings button (leftmost)
-    const settingsBtn = btnGroup.createEl('span', { 
-      cls: 'control-icon',
-      attr: { 'aria-label': 'Open Pomodoro Settings' }
-    });
-    settingsBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m4.22-13.22l4.24 4.24m-4.24 4.24l4.24 4.24M20 12h-6m-6 0H2m13.22 4.22l-4.24 4.24m-4.24-4.24l-4.24 4.24"></path></svg>`;
-    settingsBtn.onclick = () => {
-      // Open settings tab for this plugin
-      (this.app as any).setting.open();
-      (this.app as any).setting.openTabById('enhanced-pomodoro');
-    };
-    
-    // Quick Break button
-    const quickBreakBtn = btnGroup.createEl('span', {
-      cls: `control-icon ${!this.plugin.settings.enableQuickBreak ? 'control-icon-disabled' : ''}`,
-      attr: { 'aria-label': this.plugin.settings.enableQuickBreak 
+    // Quick Break button (right of play)
+    const quickBreakBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+      text: 'Quick Break',
+      ariaLabel: this.plugin.settings.enableQuickBreak 
         ? `Quick ${this.plugin.settings.quickBreakDuration} min break`
-        : 'Quick break disabled' }
+        : 'Quick break disabled',
+      onClick: () => {
+        if (this.plugin.settings.enableQuickBreak) {
+          this.plugin.startQuickBreak();
+        }
+      },
+      disabled: !this.plugin.settings.enableQuickBreak
     });
-    quickBreakBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
-    quickBreakBtn.onclick = () => {
-      if (this.plugin.settings.enableQuickBreak) {
-        this.plugin.startQuickBreak();
-      }
-    };
     // Store reference for updates
     this.quickBreakButton = quickBreakBtn;
     
-    // Reset button
-    const resetBtn = btnGroup.createEl('span', { cls: 'control-icon' });
-    resetBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>`;
-    resetBtn.onclick = () => {
-      this.plugin.resetTimer();
-    };
+    // Reset button (secondary group, left)
+    resetBtn = this.createControlButton(secondaryControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>',
+      text: 'Reset',
+      ariaLabel: 'Reset Timer',
+      onClick: () => {
+        this.plugin.resetTimer();
+      }
+    });
+    
+    // End-of-cycle button (secondary group, right)
+    endCycleBtn = this.createControlButton(secondaryControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>',
+      text: 'End Cycle',
+      ariaLabel: 'End Current Cycle',
+      onClick: () => {
+        if ('endCurrentCycle' in this.plugin && typeof this.plugin.endCurrentCycle === 'function') {
+          this.plugin.endCurrentCycle();
+        }
+      }
+    });
     
     // Store references for updates (SVG text elements)
     this.modeSpan = modeText as any; // SVG text element
     this.timeSpan = timeText as any; // SVG text element
     this.progressCircle = progressCircle;
     this.playBtn = playBtn;
+    this.settingsBtn = settingsBtn;
+    this.resetBtn = resetBtn;
+    this.endCycleBtn = endCycleBtn;
     // this.svgElement is already set in onOpen()
     this.debugStartDot = debugStartDot;
     this.debugEndDot = debugEndDot;
@@ -354,21 +1033,64 @@ export class CircularTimerView extends ItemView {
     this.timeSpan.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     
     // Update mode display (SVG text element uses textContent)
-    const modeText = this.plugin.currentMode === 'work' ? 'Work' :
-      this.plugin.currentMode === 'shortBreak' ? 'Short Break' :
-        'Long Break';
+    let modeText: string;
+    if (this.plugin.currentMode === 'work') {
+      modeText = 'Work';
+    } else if (this.plugin.currentMode === 'shortBreak') {
+      // Distinguish quick breaks from regular short breaks by checking the
+      // plugin's saved quick break state.
+      const hasQuickBreakState = (this.plugin as any).quickBreakSavedState;
+      modeText = hasQuickBreakState ? 'Quick Break' : 'Short Break';
+    } else {
+      modeText = 'Long Break';
+    }
+    
+    // Check for custom phase name
+    const currentPhase = this.plugin.getCurrentPhase();
+    if (currentPhase && currentPhase.name) {
+      modeText = currentPhase.name;
+    }
+    
     this.modeSpan.textContent = modeText;
     
     this.updateProgress();
-    
-    // Update play/pause icon
-    if (this.playBtn) {
-      if (this.plugin.isRunning) {
-        // Pause icon
-        this.playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+
+    // Keep quick break button label/state in sync
+    if (this.quickBreakButton) {
+      const enabled = this.plugin.settings.enableQuickBreak;
+      if (!enabled) {
+        this.quickBreakButton.addClass('control-icon-disabled');
+        this.quickBreakButton.setAttribute('aria-label', 'Quick break disabled');
       } else {
-        // Play icon
-        this.playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        this.quickBreakButton.removeClass('control-icon-disabled');
+        const hasQuickBreakState = (this.plugin as any).quickBreakSavedState;
+        this.quickBreakButton.setAttribute('aria-label', hasQuickBreakState
+          ? 'Quick break running (will resume previous session)'
+          : `Quick ${this.plugin.settings.quickBreakDuration} min break`);
+      }
+    }
+    
+    // Update play/pause icon and text
+    if (this.playBtn) {
+      const iconEl = this.playBtn.querySelector('.control-icon');
+      const textEl = this.playBtn.querySelector('.control-text');
+      
+      if (this.plugin.isRunning) {
+        // Pause icon and text
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+        }
+        if (textEl) {
+          (textEl as HTMLElement).textContent = 'Pause';
+        }
+      } else {
+        // Play icon and text
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        }
+        if (textEl) {
+          (textEl as HTMLElement).textContent = 'Play';
+        }
       }
     }
     
@@ -592,7 +1314,7 @@ export class CircularTimerView extends ItemView {
     }
     
     // Get total time in minutes
-    const totalMinutes = this.plugin.getTotalMinutes ? this.plugin.getTotalMinutes() : 25; // Default to 25 minutes if not available
+    const totalMinutes = Math.floor(this.plugin.getTotalTime() / 60); // Convert seconds to minutes
     const snapInterval = 5; // Snap to 5-minute intervals
     
     // Calculate snap points (every 5 minutes except the last 5 minutes)
@@ -684,21 +1406,25 @@ export class CircularTimerView extends ItemView {
     
     // Update play/pause button
     if (this.playBtn) {
+      const iconEl = this.playBtn.querySelector('.control-icon');
+      const textEl = this.playBtn.querySelector('.control-text');
+      
       if (this.plugin.isRunning) {
-        // Pause icon
-        this.playBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" 
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="6" y="4" width="4" height="16"></rect>
-            <rect x="14" y="4" width="4" height="16"></rect>
-          </svg>`;
+        // Pause icon and text
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+        }
+        if (textEl) {
+          (textEl as HTMLElement).textContent = 'Pause';
+        }
       } else {
-        // Play icon
-        this.playBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" 
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>`;
+        // Play icon and text
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        }
+        if (textEl) {
+          (textEl as HTMLElement).textContent = 'Play';
+        }
       }
     }
   }
@@ -754,28 +1480,230 @@ export class CircularTimerView extends ItemView {
         margin-top: 1rem;
       }
       
-      .control-icon {
+      .btn-group-main {
+        display: flex;
+        gap: 0.5rem;
+      }
+      
+      .btn-group-secondary {
+        display: flex;
+        gap: 0.25rem;
+        margin-left: 1rem;
+      }
+      
+      .control-button {
         cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      
+      .control-button:active {
+        background: var(--interactive-accent);
+      }
+      
+      .control-button-disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      
+      .control-button-disabled:hover {
+        background: transparent;
+      }
+      
+      .control-button:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .control-icon {
+        display: flex;
+        align-items: center;
+      }
+      
+      .control-text {
+        font-size: 0.8em;
+        white-space: nowrap;
+      }
+      
+      /* Legacy support for old control-icon class */
+      .control-icon.control-icon {
         padding: 0.5rem;
         border-radius: 4px;
         transition: background-color 0.2s;
       }
       
-      .control-icon:active {
+      .control-icon.control-icon:active {
         background: var(--interactive-accent);
       }
       
-      .control-icon-disabled {
+      .control-icon.control-icon-disabled {
         opacity: 0.4;
         cursor: not-allowed;
       }
       
-      .control-icon-disabled:hover {
+      .control-icon.control-icon-disabled:hover {
         background: transparent;
       }
       
-      .control-icon:hover {
+      .control-icon.control-icon:hover {
         background-color: var(--background-modifier-hover);
+      }
+      
+      /* Sidebar tabs */
+      .sidebar-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--background-modifier-border);
+      }
+      
+      .sidebar-tab {
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+        flex: 1;
+        text-align: center;
+      }
+      
+      .sidebar-tab:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .sidebar-tab.active {
+        border-bottom-color: var(--interactive-accent);
+        color: var(--interactive-accent);
+        font-weight: 500;
+      }
+      
+      .sidebar-content-container {
+        position: relative;
+        flex: 1;
+        overflow: hidden;
+      }
+      
+      .sidebar-content {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: auto;
+        padding: 1rem;
+      }
+      
+      /* Calendar styles */
+      .mini-calendar {
+        margin-bottom: 1.5rem;
+      }
+      
+      .calendar-header {
+        text-align: center;
+        margin-bottom: 0.5rem;
+      }
+      
+      .calendar-header h4 {
+        margin: 0;
+        font-size: 1.1em;
+        color: var(--text-normal);
+      }
+      
+      .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 2px;
+        font-size: 0.8em;
+      }
+      
+      .calendar-day-header {
+        text-align: center;
+        font-weight: 600;
+        color: var(--text-muted);
+        padding: 0.25rem;
+      }
+      
+      .calendar-day {
+        aspect-ratio: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+      
+      .calendar-day:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .calendar-day.today {
+        background-color: var(--interactive-accent);
+        color: var(--text-on-accent);
+        font-weight: 600;
+      }
+      
+      .calendar-day.empty {
+        cursor: default;
+      }
+      
+      .calendar-day.empty:hover {
+        background-color: transparent;
+      }
+      
+      /* Kanban-style tasks */
+      .kanban-column {
+        background: var(--background-secondary);
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      
+      .kanban-column h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.9em;
+        color: var(--text-normal);
+      }
+      
+      .task-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      
+      .kanban-task {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: var(--background-primary);
+        border-radius: 4px;
+        border: 1px solid var(--background-modifier-border);
+      }
+      
+      .kanban-task.completed {
+        opacity: 0.6;
+      }
+      
+      .kanban-task input[type="checkbox"] {
+        margin: 0;
+      }
+      
+      .today-tasks h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1em;
+        color: var(--text-normal);
+      }
+      
+      /* Task context display */
+      .task-context-display {
+        font-size: 0.85em;
+        color: var(--text-muted);
+        text-align: center;
+        padding: 0.5rem 0;
+        border-top: 1px solid var(--background-modifier-border);
+        border-bottom: 1px solid var(--background-modifier-border);
+        margin: 0.5rem 0;
       }
       
       .pomodoro-controls {
@@ -934,8 +1862,20 @@ export class CircularTimerView extends ItemView {
   }
 
   // Column Detection Helper Functions
+  private normalizeColumnTitle(columnTitle: string): string {
+    return columnTitle
+      .toLowerCase()
+      // Remove any trailing parenthetical like "(3)" or "(Phase 1)"
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      // Remove emojis and most punctuation so "📋 Todo" → "todo"
+      .replace(/[^\w\s#-]/g, '')
+      // Collapse extra whitespace
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   private isProgressColumn(columnTitle: string): boolean {
-    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, '').trim();
+    const normalized = this.normalizeColumnTitle(columnTitle);
     return normalized.includes('in progress') ||
            normalized.includes('phase progress') ||
            normalized.includes('current tasks') ||
@@ -945,7 +1885,7 @@ export class CircularTimerView extends ItemView {
   }
 
   private isDoneColumn(columnTitle: string): boolean {
-    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, '').trim();
+    const normalized = this.normalizeColumnTitle(columnTitle);
     return normalized.includes('done') ||  // This catches "Done - Phase 1 (Code)" 
            normalized.includes('✅') ||    // Catches any column with checkmark emoji
            normalized.includes('completed') ||
@@ -971,9 +1911,20 @@ export class CircularTimerView extends ItemView {
     return columns;
   }
 
-  private async moveTaskToColumn(taskId: string, targetColumnType: 'progress' | 'done'): Promise<boolean> {
+  private async moveTaskToColumn(
+    taskId: string,
+    targetColumnType: 'progress' | 'done',
+    explicitTargetColumnTitle?: string
+  ): Promise<boolean> {
     try {
-      const boardPath = this.plugin.settings.kanbanBoardPath;
+      // Derive the board path from the taskId when possible so moves still
+      // work even if the active Kanban board has changed since the task
+      // element was created.
+      let boardPath = this.plugin.settings.kanbanBoardPath;
+      const idMatch = taskId.match(/^task-(.+)-(\d+)$/);
+      if (idMatch) {
+        boardPath = idMatch[1];
+      }
       if (!boardPath) return false;
 
       const file = this.app.vault.getAbstractFileByPath(boardPath);
@@ -1009,7 +1960,8 @@ export class CircularTimerView extends ItemView {
       let lastColumnStart = -1;
       
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
+        const rawLine = lines[i];
+        const line = rawLine.trim();
         
         // Check if this is a column header
         if (line.startsWith('## ')) {
@@ -1037,13 +1989,32 @@ export class CircularTimerView extends ItemView {
         
         // Check if this line is a task that contains our text
         // Match both unchecked (- [ ]) and checked (- [x]) tasks
-        if ((line.startsWith('- [ ]') || line.startsWith('- [x]')) && line.includes(taskText)) {
-          taskLine = lines[i]; // Use original line with indentation
+        // Ignore any embedded timer patterns (e.g. "- 🍎 0:01") when matching
+        const lineForMatch = line
+          .replace(/ - 🍎 \d+:\d{2}/g, '')
+          .replace(/ - \d+:\d{2}/g, '')
+          .replace(/ \[\d+:\d{2}\]/g, '');
+
+        if ((lineForMatch.startsWith('- [ ]') || lineForMatch.startsWith('- [x]')) && lineForMatch.includes(taskText)) {
+          taskLine = rawLine; // Use original line with indentation
           taskLineIndex = i;
           console.log('[MOVE TASK] Found task at line', i, ':', line);
         }
       }
       
+      // If an explicit target column title was provided, honor it first
+      if (explicitTargetColumnTitle) {
+        const normalizedTitle = this.normalizeColumnTitle(explicitTargetColumnTitle);
+        const explicitColumn = columns.find(c => this.normalizeColumnTitle(c.name) === normalizedTitle);
+        if (explicitColumn) {
+          targetColumnIndex = explicitColumn.startIndex;
+          targetColumnEndIndex = explicitColumn.endIndex;
+          console.log('[MOVE TASK] Using explicit target column:', explicitTargetColumnTitle, 'at line', targetColumnIndex);
+        } else {
+          console.log('[MOVE TASK] Explicit target column not found, falling back:', explicitTargetColumnTitle);
+        }
+      }
+
       // Find the actual end of the target column
       if (targetColumnIndex >= 0) {
         const targetCol = columns.find(c => c.startIndex === targetColumnIndex);
@@ -1075,8 +2046,7 @@ export class CircularTimerView extends ItemView {
           targetColumnEndIndex--;
         }
         
-        // Find the right place to insert
-        // Look for the first task line or empty section after the header
+        // Find the right place to insert - INSERT AT TOP of column (after header + empty line)
         let insertIndex = targetColumnIndex + 1;
         
         // Skip the first empty line after header if it exists
@@ -1084,17 +2054,8 @@ export class CircularTimerView extends ItemView {
           insertIndex++;
         }
         
-        // Find where existing tasks end in target column (if any)
-        let lastTaskIndex = insertIndex - 1;
-        for (let i = insertIndex; i <= targetColumnEndIndex; i++) {
-          const line = lines[i].trim();
-          if (line.startsWith('- [ ]') || line.startsWith('- [x]')) {
-            lastTaskIndex = i;
-          }
-        }
-        
-        // Insert after the last task, or after the header if no tasks
-        insertIndex = lastTaskIndex + 1;
+        // Insert at the TOP of the column (right after header/empty line)
+        // This ensures unchecked tasks appear at the top of the progress column
         
         // For done tasks, mark as completed
         if (targetColumnType === 'done' && taskLine.includes('- [ ]')) {
@@ -1135,13 +2096,18 @@ export class CircularTimerView extends ItemView {
     }
   }
 
-  private lastKanbanUpdateTime = 0;
   private kanbanUpdateDebounceDelay = 5000; // Update Kanban file every 5 seconds max
   private lastUpdateTimerValue: Map<string, string> = new Map(); // Track last updated timer value per task
   
   private async updateTaskInKanbanFile(taskId: string, timeString: string) {
     // Only update if feature is enabled
     if (!this.plugin.settings.updateTaskTimerInFile) return;
+
+    // Only update while the work timer is actively running
+    // This prevents selection/board switches (when timer is stopped) from spamming file writes
+    if (!this.plugin.isRunning || this.plugin.currentMode !== 'work') {
+      return;
+    }
     
     // Don't update if timer is 0:00 (no time tracked)
     if (!timeString || timeString === '0:00') {
@@ -1247,20 +2213,16 @@ export class CircularTimerView extends ItemView {
         
       this.scrollToColumn(targetColumn.element);
       
-      // Find and select the moved task
+      // Find and select the moved task using full selectTask method
       const tasksInColumn = targetColumn.element.querySelectorAll('.pomodoro-task-item');
       tasksInColumn.forEach(task => {
         const taskTextEl = task.querySelector('.task-text');
         if (taskTextEl && taskTextEl.textContent === taskText) {
           const htmlTask = task as HTMLElement;
+          // Use full selectTask method to ensure proper timer binding
+          const taskId = htmlTask.getAttribute('data-task-id') || '';
           const timerEl = htmlTask.querySelector('.task-timer') as HTMLElement;
-          if (timerEl) {
-            const newTaskId = htmlTask.getAttribute('data-task-id') || '';
-            // Update active task without triggering another move
-            this.activeTaskId = newTaskId;
-            this.plugin.settings.currentTask = newTaskId;
-            htmlTask.classList.add('pomodoro-task-active');
-          }
+          this.selectTask(taskId, htmlTask, timerEl);
         }
       });
     }
@@ -1272,29 +2234,52 @@ export class CircularTimerView extends ItemView {
       return;
     }
     
-    // Ensure the container is scrollable horizontally
+    // Ensure the container is scrollable
     const containerStyles = window.getComputedStyle(this.tasksContainer);
     console.log('[SCROLL] Container overflow-x:', containerStyles.overflowX);
     
-    // Calculate the scroll position - account for container's position
-    const containerRect = this.tasksContainer.getBoundingClientRect();
-    const columnRect = columnElement.getBoundingClientRect();
+    // Force horizontal scroll if needed
+    if (containerStyles.overflowX === 'visible') {
+      this.tasksContainer.style.overflowX = 'auto';
+    }
     
-    // Calculate how much to scroll
-    const scrollLeft = columnElement.offsetLeft - 20; // 20px padding from left
-    
-    // Use scrollLeft directly for better compatibility
-    this.tasksContainer.scrollLeft = scrollLeft;
-    
-    console.log('[SCROLL] Scrolling to column:', {
-      columnLeft: columnElement.offsetLeft,
-      columnRect: columnRect.left,
-      containerRect: containerRect.left,
-      scrollTo: scrollLeft,
-      currentScroll: this.tasksContainer.scrollLeft,
-      containerWidth: this.tasksContainer.offsetWidth,
-      containerScrollWidth: this.tasksContainer.scrollWidth
-    });
+    // Wait a bit for DOM to be ready, then scroll
+    setTimeout(() => {
+      // Double-check container still exists
+      if (!this.tasksContainer) {
+        console.log('[SCROLL] Tasks container no longer exists');
+        return;
+      }
+      
+      // Calculate the scroll position
+      const scrollLeft = columnElement.offsetLeft - 20; // 20px padding from left
+      
+      // Ensure we don't scroll beyond bounds
+      const maxScroll = this.tasksContainer.scrollWidth - this.tasksContainer.clientWidth;
+      const finalScrollLeft = Math.max(0, Math.min(scrollLeft, maxScroll));
+      
+      // Use smooth scrolling if available
+      if (this.tasksContainer.scrollTo) {
+        this.tasksContainer.scrollTo({
+          left: finalScrollLeft,
+          behavior: 'smooth'
+        });
+      }
+      
+      // Fallback for browsers that don't support scrollTo behavior
+      if (this.tasksContainer.scrollLeft !== finalScrollLeft) {
+        this.tasksContainer.scrollLeft = finalScrollLeft;
+      }
+      
+      console.log('[SCROLL] Scrolling to column:', {
+        columnLeft: columnElement.offsetLeft,
+        scrollTo: finalScrollLeft,
+        currentScroll: this.tasksContainer.scrollLeft,
+        containerWidth: this.tasksContainer.offsetWidth,
+        containerScrollWidth: this.tasksContainer.scrollWidth,
+        maxScroll: maxScroll
+      });
+    }, 100); // Small delay to ensure DOM is ready
   }
 
   private async addKanbanBoardSelector(container: HTMLElement): Promise<void> {
@@ -1370,6 +2355,31 @@ export class CircularTimerView extends ItemView {
     this.refreshButton.style.alignItems = 'center';
     this.refreshButton.style.justifyContent = 'center';
 
+    // Add open file button
+    this.openFileButton = selectorContainer.createEl('button', {
+      cls: 'clickable-icon',
+      attr: { 'aria-label': 'Open current Kanban file' }
+    });
+    
+    if (!this.openFileButton) {
+      console.error('Failed to create open file button');
+      return;
+    }
+    
+    this.openFileButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>';
+    this.openFileButton.style.border = 'none';
+    this.openFileButton.style.background = 'var(--background-modifier-form-field)';
+    this.openFileButton.style.borderRadius = '4px';
+    this.openFileButton.style.padding = '4px';
+    this.openFileButton.style.cursor = 'pointer';
+    this.openFileButton.style.display = 'flex';
+    this.openFileButton.style.alignItems = 'center';
+    this.openFileButton.style.justifyContent = 'center';
+    
+    // Initially disable if no board is selected
+    this.openFileButton.style.opacity = '0.5';
+    this.openFileButton.style.cursor = 'not-allowed';
+
     // Load available Kanban boards FIRST
     await this.loadKanbanBoards();
     
@@ -1387,6 +2397,8 @@ export class CircularTimerView extends ItemView {
         try {
           await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
           console.log('[Kanban Startup] Tasks loaded successfully');
+          // Update task context display after loading initial board
+          this.updateTaskContextDisplay();
         } catch (error) {
           console.error('[Kanban Startup] Failed loading tasks:', error);
         }
@@ -1395,6 +2407,8 @@ export class CircularTimerView extends ItemView {
         // Clear the invalid path
         this.plugin.settings.kanbanBoardPath = '';
         await this.plugin.saveSettings();
+        // Update task context display after clearing invalid path
+        this.updateTaskContextDisplay();
       }
     } else {
       console.log('[Kanban Startup] No previous board to restore');
@@ -1448,6 +2462,21 @@ export class CircularTimerView extends ItemView {
         } catch (error) {
           console.error('Failed loading Kanban tasks:', error);
        }
+        
+        // Update task context display
+        this.updateTaskContextDisplay();
+        
+        // Update open file button state
+        if (this.openFileButton) {
+          if (selectedPath) {
+            this.openFileButton.style.opacity = '1';
+            this.openFileButton.style.cursor = 'pointer';
+          } else {
+            this.openFileButton.style.opacity = '0.5';
+            this.openFileButton.style.cursor = 'not-allowed';
+          }
+        }
+        
         console.log('═══════════════════════════════════════════════════════');
 
         // Refresh the Kanban buttons
@@ -1464,6 +2493,32 @@ export class CircularTimerView extends ItemView {
         await this.loadKanbanBoards();
         if (this.plugin.refreshKanbanButtons) {
           this.plugin.refreshKanbanButtons(true);
+        }
+      });
+    }
+    
+    // Handle open file button click
+    if (this.openFileButton) {
+      this.openFileButton.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        const currentPath = this.plugin.settings.kanbanBoardPath;
+        if (!currentPath) {
+          new Notice('No Kanban file selected');
+          return;
+        }
+        
+        try {
+          const file = this.app.vault.getAbstractFileByPath(currentPath);
+          if (file instanceof TFile) {
+            // Open the file in a new leaf
+            await this.app.workspace.getLeaf(true).openFile(file);
+          } else {
+            new Notice('Kanban file not found');
+          }
+        } catch (error) {
+          console.error('Failed to open Kanban file:', error);
+          new Notice('Failed to open Kanban file');
         }
       });
     }
@@ -1589,12 +2644,6 @@ export class CircularTimerView extends ItemView {
     }
   }
 
-  private currentTaskElement: HTMLElement | null = null;
-  private taskTimers: Map<string, number> = new Map(); // Store accumulated time for each task
-  private taskTimersByText: Map<string, number> = new Map(); // Store timers by task text for persistence
-  private activeTaskId: string | null = null;
-  private lastUpdateTime: number = Date.now();
-
   private async loadKanbanTasks(boardPath: string): Promise<void> {
     if (!this.tasksContainer) {
       console.warn('Tasks container not initialized');
@@ -1650,6 +2699,7 @@ export class CircularTimerView extends ItemView {
       // The Obsidian Kanban plugin stores tasks in a special format
       // Format: - [ ] task text or just plain text in kanban cards
       const tasks: Array<{text: string, column: string, completed: boolean}> = [];
+      let allColumnNames: string[] = []; // Track all columns even if empty
       
       // Try to parse as JSON first (newer Kanban format)
       try {
@@ -1697,6 +2747,8 @@ export class CircularTimerView extends ItemView {
         // Split content by h2 headers (##) to create columns
         const sections = cleanContent.split(/^##\s+/gm).filter(s => s.trim());
         
+        // Track all column names (even empty ones) - use outer scope variable
+        
         if (sections.length > 0) {
           for (const section of sections) {
             const lines = section.split('\n');
@@ -1709,8 +2761,11 @@ export class CircularTimerView extends ItemView {
               .replace(/[#*_~`]/g, '') // Remove markdown formatting
               .trim();
             
-            // Skip empty columns
+            // Skip empty column names
             if (!columnName) continue;
+            
+            // Track this column
+            allColumnNames.push(columnName);
             
             // Parse tasks from remaining lines
             for (let i = 1; i < lines.length; i++) {
@@ -1802,14 +2857,6 @@ export class CircularTimerView extends ItemView {
         }
       }
 
-      if (tasks.length === 0) {
-        this.tasksContainer.createEl('p', { 
-          text: 'No tasks found in this Kanban board',
-          cls: 'pomodoro-no-tasks'
-        });
-        return;
-      }
-
       // Group tasks by column
       const tasksByColumn = new Map<string, typeof tasks>();
       for (const task of tasks) {
@@ -1818,21 +2865,43 @@ export class CircularTimerView extends ItemView {
         }
         tasksByColumn.get(task.column)?.push(task);
       }
+      
+      // Ensure all columns are in the map (even empty ones)
+      for (const colName of allColumnNames) {
+        if (!tasksByColumn.has(colName)) {
+          tasksByColumn.set(colName, []);
+        }
+      }
 
-      // Sort columns: incomplete first, then completed
-      const sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
-        const aCompleted = a.toLowerCase().includes('done') || a.toLowerCase().includes('complete');
-        const bCompleted = b.toLowerCase().includes('done') || b.toLowerCase().includes('complete');
-        if (aCompleted && !bCompleted) return 1;
-        if (!aCompleted && bCompleted) return -1;
-        return 0;
-      });
+      // If no columns found at all, show message
+      if (tasksByColumn.size === 0) {
+        this.tasksContainer.createEl('p', { 
+          text: 'No columns found in this Kanban board',
+          cls: 'pomodoro-no-tasks'
+        });
+        return;
+      }
 
-      // Display tasks grouped by column
+      // Sort columns: use original order from allColumnNames if available, otherwise alphabetical
+      let sortedColumns: string[];
+      if (allColumnNames.length > 0) {
+        // Use original order from file
+        sortedColumns = allColumnNames;
+      } else {
+        // Fallback: sort with incomplete first, then completed
+        sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
+          const aCompleted = a.toLowerCase().includes('done') || a.toLowerCase().includes('complete');
+          const bCompleted = b.toLowerCase().includes('done') || b.toLowerCase().includes('complete');
+          if (aCompleted && !bCompleted) return 1;
+          if (!aCompleted && bCompleted) return -1;
+          return 0;
+        });
+      }
+
+      // Display tasks grouped by column (including empty columns)
       let globalTaskIndex = 0;
       for (const columnName of sortedColumns) {
         const columnTasks = tasksByColumn.get(columnName) || [];
-        if (columnTasks.length === 0) continue;
 
         // Create a group container for each column
         const taskGroup = this.tasksContainer.createEl('div', {
@@ -1851,10 +2920,11 @@ export class CircularTimerView extends ItemView {
         // Create task list for this column inside the group
         const taskList = taskGroup.createEl('ul', { cls: 'pomodoro-task-list' });
         
-        // Add drop zone handlers for drag & drop
+        // Add drop zone handlers for drag & drop (moves update the underlying Kanban file)
         taskList.addEventListener('dragover', (e) => {
           e.preventDefault();
-          e.dataTransfer!.dropEffect = 'move';
+          if (!e.dataTransfer) return;
+          e.dataTransfer.dropEffect = 'move';
           taskList.classList.add('drag-over');
         });
         
@@ -1869,16 +2939,39 @@ export class CircularTimerView extends ItemView {
           const draggedTaskId = e.dataTransfer?.getData('text/plain');
           if (!draggedTaskId) return;
           
-          // Find the target column name
-          const targetColumnName = columnName;
+          // Determine target column type based on its title
+          const targetTitle = columnName;
+          let targetType: 'progress' | 'done' | null = null;
+          if (this.isDoneColumn(targetTitle)) {
+            targetType = 'done';
+          } else if (this.isProgressColumn(targetTitle)) {
+            targetType = 'progress';
+          } else {
+            // Treat generic Todo / Backlog style columns as progress-type for timer tracking
+            targetType = 'progress';
+          }
           
-          // Simple implementation: just move the task to this column
-          // In a real implementation, you'd update the Kanban file
-          new Notice(`Moving task to "${targetColumnName}" - manual drag & drop (coming soon)`);
+          if (!targetType) return;
           
-          // For now, just show it's possible but not fully implemented
-          // Full implementation would require updating the Kanban markdown file
+          console.log('[DRAG & DROP] Moving task', draggedTaskId, 'to column', targetTitle, 'type', targetType);
+          const success = await this.moveTaskToColumn(draggedTaskId, targetType, targetTitle);
+          if (!success) {
+            new Notice(`Could not move task to "${targetTitle}". Check Kanban file structure.`);
+          } else {
+            console.log('[DRAG & DROP] Move complete for', draggedTaskId, '→', targetTitle);
+          }
         });
+        
+        // Show empty state for columns with no tasks
+        if (columnTasks.length === 0) {
+          const emptyState = taskList.createEl('li', { 
+            cls: 'pomodoro-empty-column',
+            text: 'No tasks'
+          });
+          emptyState.style.opacity = '0.5';
+          emptyState.style.fontStyle = 'italic';
+          emptyState.style.padding = '0.5rem';
+        }
         
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
@@ -1909,7 +3002,7 @@ export class CircularTimerView extends ItemView {
 
             await this.updateTaskCompletionState(taskId, checkbox.checked);
             
-            // If task is being completed, log the total time
+            // If task is being completed, log the total time and auto-move to Done
             if (checkbox.checked) {
               // Clear active task if this was it (prevent timer updates on completed task)
               if (this.activeTaskId === taskId) {
@@ -1928,54 +3021,101 @@ export class CircularTimerView extends ItemView {
                 
                 // Update the task in the Kanban file with final time
                 const minutes = Math.floor(totalTime / 60);
-                const seconds = Math.floor(totalTime % 60);
-                const finalTimeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                const seconds = totalTime % 60;
+                const finalTimeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                await this.updateTaskInKanbanFile(taskId, finalTimeStr);
+              }
+              
+              // Auto-move to Done column if enabled
+              if (this.plugin.settings.autoMoveToDone) {
+                const currentGroupEl = taskItem.closest('.pomodoro-task-group');
+                const currentColumnTitle = currentGroupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
                 
-                // Force update the task in Kanban file with final time
-                this.lastKanbanUpdateTime = 0; // Force update
-                this.lastUpdateTimerValue.delete(taskId); // Clear cached value
-                await this.updateTaskInKanbanFile(taskId, finalTimeString);
-                
-                console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+                // Only move if not already in a Done column
+                if (!this.isDoneColumn(currentColumnTitle)) {
+                  // Store original column before moving to Done (for uncheck restore)
+                  this.taskOriginalColumns.set(taskId, currentColumnTitle);
+                  console.log('[AUTO-MOVE] Storing original column for task:', currentColumnTitle);
+                  
+                  const doneColumns = this.findColumnsByType('done');
+                  
+                  if (doneColumns.length === 0) {
+                    console.log('[AUTO-MOVE] No Done column found');
+                    new Notice('No "Done" column found on this board.');
+                  } else {
+                    const doneTitle = doneColumns[0].title;
+                    console.log('[AUTO-MOVE] Moving completed task to Done column:', doneTitle);
+                    
+                    const moved = await this.moveTaskToColumn(taskId, 'done', doneTitle);
+                    if (moved) {
+                      new Notice(`Task moved to "${doneTitle}"`);
+                      
+                      // Scroll to Done column after move
+                      setTimeout(() => {
+                        const updatedDoneColumns = this.findColumnsByType('done');
+                        if (updatedDoneColumns.length > 0) {
+                          this.scrollToColumn(updatedDoneColumns[0].element);
+                        }
+                      }, 400);
+                    }
+                  }
+                }
               }
             } else {
-              // Task is being unchecked - just log it, don't force file updates
-              // File updates will happen naturally when the task is used again
-              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - available for use`);
-            }
-            
-            // Auto-move to done column if enabled and checkbox is checked
-            if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
-              const currentGroupEl = taskItem.closest('.pomodoro-task-group');
-              const currentColumnTitle = currentGroupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
+              // Task is being uncompleted - move it back to ORIGINAL column (or progress as fallback)
+              console.log('[TASK UNCOMPLETE] Moving task back:', task.text);
               
-              if (!this.isDoneColumn(currentColumnTitle)) {
-                const doneColumns = this.findColumnsByType('done');
+              // Check if we have the original column stored
+              const originalColumn = this.taskOriginalColumns.get(taskId);
+              let targetColumnTitle: string | null = null;
+              let targetColumnType: 'progress' | 'done' = 'progress';
+              
+              if (originalColumn) {
+                console.log('[TASK UNCOMPLETE] Restoring to original column:', originalColumn);
+                targetColumnTitle = originalColumn;
+                // Determine column type based on original column
+                targetColumnType = this.isProgressColumn(originalColumn) ? 'progress' : 'progress';
+              } else {
+                // Fallback to progress column
+                const progressColumns = this.findColumnsByType('progress');
+                if (progressColumns.length > 0) {
+                  targetColumnTitle = progressColumns[0].title;
+                  console.log('[TASK UNCOMPLETE] No original column, using progress:', targetColumnTitle);
+                }
+              }
+              
+              if (targetColumnTitle) {
+                // Move task to target column (this places it at top)
+                const moved = await this.moveTaskToColumn(taskId, targetColumnType, targetColumnTitle);
                 
-                if (doneColumns.length === 0) {
-                  new Notice('No "Done" column found on this board. Consider disabling auto-move in settings.');
-                } else if (doneColumns.length > 1) {
-                  const columnNames = doneColumns.map(c => c.title).join(', ');
-                  new Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
-                } else {
-                  // Move to the single done column
-                  const doneTitle = doneColumns[0].title;
-                  const success = await this.moveTaskToColumn(taskId, 'done');
-                  if (success) {
-                    new Notice(`Task moved to "${doneTitle}"`);
-                    // Wait for reload to complete, then scroll to the done column
-                    setTimeout(() => {
-                      const newDoneColumns = this.findColumnsByType('done');
-                      if (newDoneColumns.length > 0) {
-                        this.scrollToColumn(newDoneColumns[0].element);
-                      }
-                    }, 200);
-                  }
+                if (moved) {
+                  // Clear the stored original column
+                  this.taskOriginalColumns.delete(taskId);
+                  
+                  // Wait for file reload, then scroll and re-select
+                  setTimeout(() => {
+                    // Find the column we moved to
+                    const allColumns = this.findColumnsByType('progress').concat(this.findColumnsByType('done'));
+                    const targetCol = allColumns.find(c => c.title === targetColumnTitle);
+                    
+                    if (targetCol) {
+                      this.scrollToColumn(targetCol.element);
+                      
+                      // Re-select the task
+                      setTimeout(() => {
+                        const taskEl = targetCol.element.querySelector(`[data-task-id="${taskId}"]`) as HTMLElement;
+                        if (taskEl) {
+                          const timerEl = taskEl.querySelector('.task-timer') as HTMLElement;
+                          this.selectTask(taskId, taskEl, timerEl);
+                        }
+                      }, 200);
+                    }
+                  }, 400);
                 }
               }
             }
           });
-          
+
           // Remove timer info from displayed text to avoid duplication
           let displayText = task.text;
           displayText = displayText
@@ -2070,20 +3210,7 @@ export class CircularTimerView extends ItemView {
     }
 
     const taskText = taskElement.querySelector('.task-text')?.textContent || 'Unknown Task';
-    const kanbanFile = this.plugin.settings.kanbanBoardPath || 'No Kanban Selected';
-    const kanbanFileName = kanbanFile.split('/').pop()?.replace('.md', '') || 'Unknown';
-    
-    // Force update the previous task's timer in Kanban file before switching
-    if (this.activeTaskId && this.activeTaskId !== taskId) {
-      const prevTime = this.taskTimers.get(this.activeTaskId) || 0;
-      if (prevTime > 0) {
-        const minutes = Math.floor(prevTime / 60);
-        const seconds = Math.floor(prevTime % 60);
-        const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
-      }
-    }
-    
+
     // Clear cached timer value for the new task to ensure it gets updated
     this.lastUpdateTimerValue.delete(taskId);
     
@@ -2092,23 +3219,16 @@ export class CircularTimerView extends ItemView {
     const checkbox = taskElement.querySelector('.task-checkbox') as HTMLInputElement;
     
     if (isCompleted || (checkbox && checkbox.checked)) {
-      // Show warning message for completed tasks
-      this.showCompletedTaskWarning(taskText);
       console.log('[TASK SELECTION] Cannot select completed task:', taskText);
       return;
     }
     
-    // Check if we need to restrict to progress tasks only
-    if (this.plugin.settings.restrictToProgressTasks) {
-      const groupEl = taskElement.closest('.pomodoro-task-group');
-      const columnTitle = groupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
-      
-      if (!this.isProgressColumn(columnTitle)) {
-        this.showCompletedTaskWarning(`Task must be in progress column to start timer. Current: "${columnTitle}"`);
-        console.log('[TASK SELECTION] Task not in progress column:', columnTitle);
-        return;
-      }
-    }
+    // Note: restrictToProgressTasks setting has been removed
+    // This functionality is now handled automatically
+    
+    // Check if task is in a progress column (for auto-scroll)
+    const groupEl = taskElement.closest('.pomodoro-task-group');
+    const columnTitle = groupEl?.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
     
     // Auto-move to progress if enabled
     if (this.plugin.settings.autoMoveToProgress) {
@@ -2179,7 +3299,6 @@ export class CircularTimerView extends ItemView {
     console.log('  Previous Task ID:', this.activeTaskId || 'None');
     console.log('  New Task ID:', taskId);
     console.log('  New Task Name:', taskText);
-    console.log('  Kanban File:', kanbanFile);
     console.log('  Timer Running:', this.plugin.isRunning);
     console.log('  Current Mode:', this.plugin.currentMode);
     
@@ -2205,7 +3324,7 @@ export class CircularTimerView extends ItemView {
       // The boardPath is between "task-" and the last "-{index}"
       const prevTaskParts = this.activeTaskId.match(/^task-(.+)-(\d+)$/);
       const prevKanbanPath = prevTaskParts ? prevTaskParts[1] : '';
-      const prevKanbanFileName = prevKanbanPath.split('/').pop()?.replace('.md', '') || kanbanFileName;
+      const prevKanbanFileName = prevKanbanPath.split('/').pop()?.replace('.md', '') || 'Unknown';
       
       // Log to task timer file with the correct kanban file name
       await this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName);
@@ -2263,6 +3382,18 @@ export class CircularTimerView extends ItemView {
     const seconds = Math.floor(totalTime % 60);
     const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     timerElement.setText(` [${timeString}]`);
+    
+    // Keep the text-based timer map in sync so that if the task is moved to a
+    // different column (and therefore gets a new taskId), we can still restore
+    // its timer just from the task text without relying on the Kanban file
+    // already containing a "🍎 mm:ss" fragment.
+    if (this.currentTaskElement) {
+      const textEl = this.currentTaskElement.querySelector('.task-text') as HTMLElement | null;
+      const key = textEl?.textContent?.trim();
+      if (key) {
+        this.taskTimersByText.set(key, totalTime);
+      }
+    }
     
     // Only update the task in the Kanban file when timer is actively running in work mode
     // This avoids expensive file writes (and reloads) when simply selecting tasks

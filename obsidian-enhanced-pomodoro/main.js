@@ -36,28 +36,79 @@ var CIRCULAR_TIMER_VIEW = "circular-timer-view";
 var CircularTimerView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
-    this.plugin = plugin;
-    this.kanbanSelector = null;
     this.tasksContainer = null;
+    // Task tracking
+    this.taskTimers = /* @__PURE__ */ new Map();
+    this.taskTimersByText = /* @__PURE__ */ new Map();
+    this.taskOriginalColumns = /* @__PURE__ */ new Map();
+    // Track original column per task
+    this.activeTaskId = null;
+    this.currentTaskElement = null;
+    this.lastUpdateTime = Date.now();
+    this.animationFrameId = null;
+    // Kanban board tracking
+    this.kanbanBoards = /* @__PURE__ */ new Map();
+    this.currentKanbanFile = null;
+    this.lastKanbanUpdateTime = 0;
+    // Quick break button reference
+    this.quickBreakButton = null;
+    // Container reference
+    this.container = null;
+    // Button references
+    this.playBtn = null;
+    this.settingsBtn = null;
+    this.resetBtn = null;
+    this.endCycleBtn = null;
+    this.kanbanSelector = null;
     this.refreshButton = null;
+    this.openFileButton = null;
     this.warningElement = null;
     this.warningTimeout = null;
-    this.quickBreakButton = null;
     this.isDragging = false;
     this.dragTarget = null;
     this.snapIndicators = [];
-    this.animationFrameId = null;
-    this.lastKanbanUpdateTime = 0;
     this.kanbanUpdateDebounceDelay = 5e3;
     // Update Kanban file every 5 seconds max
     this.lastUpdateTimerValue = /* @__PURE__ */ new Map();
-    this.currentTaskElement = null;
-    this.taskTimers = /* @__PURE__ */ new Map();
-    // Store accumulated time for each task
-    this.taskTimersByText = /* @__PURE__ */ new Map();
-    // Store timers by task text for persistence
-    this.activeTaskId = null;
-    this.lastUpdateTime = Date.now();
+    this.plugin = plugin;
+  }
+  async updateTaskCompletionState(taskId, completed) {
+    try {
+      const boardPath = this.plugin.settings.kanbanBoardPath;
+      if (!boardPath) return;
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian.TFile)) return;
+      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
+      if (!taskElement) return;
+      const taskTextElement = taskElement.querySelector(".task-text");
+      if (!taskTextElement) return;
+      let originalText = taskTextElement.textContent || "";
+      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "").trim();
+      const content = await this.app.vault.read(file);
+      const lines = content.split("\n");
+      let updated = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if ((line.includes("- [") || line.includes("* [")) && line.includes(originalText)) {
+          const checkboxPattern = /([-*]\s+\[)([ xX])(\])/;
+          if (checkboxPattern.test(line)) {
+            lines[i] = line.replace(checkboxPattern, (_, prefix, _state, suffix) => {
+              const newState = completed ? "x" : " ";
+              return `${prefix}${newState}${suffix}`;
+            });
+            updated = true;
+            break;
+          }
+        }
+      }
+      if (updated) {
+        await this.app.vault.modify(file, lines.join("\n"));
+        this.lastKanbanUpdateTime = Date.now();
+        console.log(`[KANBAN UPDATE] Task completion state updated: ${originalText} \u2192 ${completed ? "[x]" : "[ ]"}`);
+      }
+    } catch (error) {
+      console.error("[KANBAN UPDATE] Failed to update completion state:", error);
+    }
   }
   getViewType() {
     return CIRCULAR_TIMER_VIEW;
@@ -71,6 +122,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
   async onOpen() {
     const container = this.containerEl.children[1];
     container.empty();
+    this.container = this.containerEl.children[1];
     container.style.display = "flex";
     container.style.flexDirection = "column";
     container.style.height = "100%";
@@ -87,12 +139,64 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     svgContainer.appendChild(this.svgElement);
     timerContainer.appendChild(svgContainer);
     const controls = container.createDiv("pomodoro-controls");
-    this.tasksContainer = container.createDiv("pomodoro-tasks");
+    const sidebarContainer = container.createDiv("pomodoro-sidebar");
+    sidebarContainer.style.flexGrow = "1";
+    sidebarContainer.style.display = "flex";
+    sidebarContainer.style.flexDirection = "column";
+    const tabsContainer = sidebarContainer.createDiv("sidebar-tabs");
+    tabsContainer.style.display = "flex";
+    tabsContainer.style.borderBottom = "1px solid var(--background-modifier-border)";
+    const miniCalendarTab = tabsContainer.createDiv("sidebar-tab");
+    miniCalendarTab.setAttribute("data-tab", "mini-calendar");
+    miniCalendarTab.createSpan({ text: "\u{1F4C5} Mini Calendar" });
+    miniCalendarTab.onclick = () => this.switchSidebarView("mini-calendar");
+    const calendarTasksTab = tabsContainer.createDiv("sidebar-tab");
+    calendarTasksTab.setAttribute("data-tab", "calendar-tasks");
+    calendarTasksTab.createSpan({ text: "\u{1F4CB} Calendar Tasks" });
+    calendarTasksTab.onclick = () => this.switchSidebarView("calendar-tasks");
+    const manualTab = tabsContainer.createDiv("sidebar-tab");
+    manualTab.setAttribute("data-tab", "manual");
+    manualTab.createSpan({ text: "\u{1F4DD} Manual Kanban" });
+    manualTab.onclick = () => this.switchSidebarView("manual");
+    const contentContainer = sidebarContainer.createDiv("sidebar-content-container");
+    contentContainer.style.flexGrow = "1";
+    contentContainer.style.position = "relative";
+    const miniCalendarContent = contentContainer.createDiv("sidebar-content");
+    miniCalendarContent.setAttribute("data-content", "mini-calendar");
+    miniCalendarContent.style.position = "absolute";
+    miniCalendarContent.style.top = "0";
+    miniCalendarContent.style.left = "0";
+    miniCalendarContent.style.right = "0";
+    miniCalendarContent.style.bottom = "0";
+    miniCalendarContent.style.overflow = "auto";
+    const calendarTasksContent = contentContainer.createDiv("sidebar-content");
+    calendarTasksContent.setAttribute("data-content", "calendar-tasks");
+    calendarTasksContent.style.position = "absolute";
+    calendarTasksContent.style.top = "0";
+    calendarTasksContent.style.left = "0";
+    calendarTasksContent.style.right = "0";
+    calendarTasksContent.style.bottom = "0";
+    calendarTasksContent.style.overflow = "auto";
+    const manualContent = contentContainer.createDiv("sidebar-content");
+    manualContent.setAttribute("data-content", "manual");
+    manualContent.style.position = "absolute";
+    manualContent.style.top = "0";
+    manualContent.style.left = "0";
+    manualContent.style.right = "0";
+    manualContent.style.bottom = "0";
+    manualContent.style.overflow = "auto";
+    this.tasksContainer = manualContent.createDiv("pomodoro-tasks");
     this.tasksContainer.style.flexGrow = "1";
     this.tasksContainer.style.overflowY = "auto";
+    let defaultView = this.plugin.settings.sidebarView;
+    if (!this.plugin.settings.kanbanBoardPath && defaultView === "manual") {
+      defaultView = "calendar-tasks";
+    }
+    this.switchSidebarView(defaultView || "calendar-tasks");
     await this.addKanbanBoardSelector(controls);
     this.initializeSvgElements();
     this.addStyles();
+    this.setupResponsiveLayout();
     this.animate();
     setTimeout(async () => {
       await this.loadKanbanBoards();
@@ -105,8 +209,403 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       }
     }, 500);
   }
+  // Button style management
+  updateButtonStyle() {
+    if (!this.container) return;
+    const buttonStyle = this.plugin.settings.buttonStyle;
+    const buttons = this.container.querySelectorAll(".control-button");
+    buttons.forEach((button) => {
+      const buttonEl = button;
+      const icon = buttonEl.querySelector(".control-icon");
+      const text = buttonEl.querySelector(".control-text");
+      if (buttonStyle === "icons+text") {
+        if (icon) icon.style.display = "";
+        if (text) text.style.display = "";
+      } else if (buttonStyle === "text") {
+        if (icon) icon.style.display = "none";
+        if (text) text.style.display = "";
+      } else if (buttonStyle === "icons") {
+        if (icon) icon.style.display = "";
+        if (text) text.style.display = "none";
+      }
+    });
+    this.updateButtonTooltips();
+  }
+  updateButtonTooltips() {
+    if (!this.container) return;
+    const showTooltips = this.plugin.settings.showButtonTooltips;
+    const buttonStyle = this.plugin.settings.buttonStyle;
+    const buttons = this.container.querySelectorAll(".control-button");
+    buttons.forEach((button) => {
+      const buttonEl = button;
+      if (buttonStyle === "icons" && showTooltips) {
+        buttonEl.classList.add("has-tooltip");
+      } else {
+        buttonEl.classList.remove("has-tooltip");
+      }
+    });
+  }
+  updateTaskContextDisplay() {
+    const taskContextDiv = this.container?.querySelector(".task-context-display");
+    if (!taskContextDiv) return;
+    const currentView = this.plugin.settings.sidebarView;
+    let contextText = "";
+    switch (this.plugin.settings.sidebarView) {
+      case "mini-calendar":
+        contextText = "Mini Calendar View";
+        break;
+      case "calendar-tasks":
+        contextText = "Calendar Tasks View";
+        break;
+      case "manual":
+        if (this.plugin.settings.kanbanBoardPath) {
+          const boardName = this.plugin.settings.kanbanBoardPath.split("/").pop()?.replace(".md", "") || "Unknown";
+          contextText = `Manual: ${boardName}`;
+        } else {
+          contextText = "Manual: No Board Selected";
+        }
+        break;
+    }
+    taskContextDiv.textContent = contextText;
+  }
+  setupResponsiveLayout() {
+    if (!this.container) return;
+    const checkWidth = () => {
+      if (!this.plugin.settings.responsiveButtons || !this.container) return;
+      const sidebarWidth = this.container.clientWidth;
+      const shouldUseIconsOnly = sidebarWidth < 575;
+      const buttons = this.container.querySelectorAll(".control-button");
+      buttons.forEach((button) => {
+        const buttonEl = button;
+        const iconEl = buttonEl.querySelector(".control-icon");
+        const textEl = buttonEl.querySelector(".control-text");
+        if (shouldUseIconsOnly) {
+          if (iconEl) iconEl.style.display = "block";
+          if (textEl) textEl.style.display = "none";
+          buttonEl.classList.add("icons-only");
+        } else {
+          const currentStyle = this.plugin.settings.buttonStyle;
+          if (currentStyle === "icons") {
+            if (iconEl) iconEl.style.display = "block";
+            if (textEl) textEl.style.display = "none";
+            buttonEl.classList.add("icons-only");
+          } else if (currentStyle === "text") {
+            if (iconEl) iconEl.style.display = "none";
+            if (textEl) textEl.style.display = "block";
+            buttonEl.classList.remove("icons-only");
+          } else {
+            if (iconEl) iconEl.style.display = "block";
+            if (textEl) textEl.style.display = "block";
+            buttonEl.classList.remove("icons-only");
+          }
+        }
+      });
+    };
+    checkWidth();
+    const resizeObserver = new ResizeObserver(checkWidth);
+    resizeObserver.observe(this.container);
+    this.resizeObserver = resizeObserver;
+  }
+  updateResponsiveLayout() {
+    this.setupResponsiveLayout();
+  }
+  isToday(date) {
+    const today = /* @__PURE__ */ new Date();
+    return date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
+  }
+  // Sidebar view management
+  switchSidebarView(view) {
+    if (!this.container) return;
+    const miniCalendarTab = this.container.querySelector('.sidebar-tab[data-tab="mini-calendar"]');
+    const calendarTasksTab = this.container.querySelector('.sidebar-tab[data-tab="calendar-tasks"]');
+    const manualTab = this.container.querySelector('.sidebar-tab[data-tab="manual"]');
+    const miniCalendarContent = this.container.querySelector('.sidebar-content[data-content="mini-calendar"]');
+    const calendarTasksContent = this.container.querySelector('.sidebar-content[data-content="calendar-tasks"]');
+    const manualContent = this.container.querySelector('.sidebar-content[data-content="manual"]');
+    if (miniCalendarTab && calendarTasksTab && manualTab) {
+      miniCalendarTab.classList.remove("active");
+      calendarTasksTab.classList.remove("active");
+      manualTab.classList.remove("active");
+      if (view === "mini-calendar") {
+        miniCalendarTab.classList.add("active");
+      } else if (view === "calendar-tasks") {
+        calendarTasksTab.classList.add("active");
+      } else {
+        manualTab.classList.add("active");
+      }
+    }
+    if (miniCalendarContent && calendarTasksContent && manualContent) {
+      miniCalendarContent.style.display = "none";
+      calendarTasksContent.style.display = "none";
+      manualContent.style.display = "none";
+      if (view === "mini-calendar") {
+        miniCalendarContent.style.display = "block";
+      } else if (view === "calendar-tasks") {
+        calendarTasksContent.style.display = "block";
+      } else {
+        manualContent.style.display = "block";
+      }
+    }
+    if (view === "mini-calendar") {
+      this.loadMiniCalendarView();
+    } else if (view === "calendar-tasks") {
+      this.loadCalendarTasksView();
+    }
+    this.updateTaskContextDisplay();
+  }
+  loadMiniCalendarView() {
+    const miniCalendarContent = this.container?.querySelector('.sidebar-content[data-content="mini-calendar"]');
+    if (!miniCalendarContent) return;
+    miniCalendarContent.empty();
+    const miniCalendar = miniCalendarContent.createDiv("mini-calendar");
+    this.createMiniCalendar(miniCalendar);
+  }
+  loadCalendarTasksView() {
+    const calendarTasksContent = this.container?.querySelector('.sidebar-content[data-content="calendar-tasks"]');
+    if (!calendarTasksContent) return;
+    calendarTasksContent.empty();
+    const today = /* @__PURE__ */ new Date();
+    const dailyNotePath = this.getDailyNotePath(today);
+    const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
+    if (file instanceof import_obsidian.TFile) {
+      this.app.vault.read(file).then((content) => {
+        const todayTasks = calendarTasksContent.createDiv("today-tasks");
+        todayTasks.createEl("h3", { text: "Today" });
+        const tasksList = todayTasks.createDiv("kanban-style-tasks");
+        this.displayKanbanTasks(tasksList, content, dailyNotePath);
+      }).catch((err) => {
+        console.error("[CALENDAR] Failed to read daily kanban file:", err);
+        calendarTasksContent.createEl("p", { text: "Failed to load today's tasks", cls: "error-message" });
+      });
+    } else {
+      const emptyState = calendarTasksContent.createDiv("empty-state");
+      emptyState.createEl("p", {
+        text: `No daily kanban file for today. Click "Create Today's Kanban" to get started.`,
+        cls: "empty-state-message"
+      });
+      const createButton = emptyState.createEl("button", {
+        text: "Create Today's Kanban",
+        cls: "mod-cta"
+      });
+      createButton.onclick = async () => {
+        await this.createDailyKanbanFile(today);
+        this.loadCalendarTasksView();
+      };
+    }
+  }
+  getDailyNotePath(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const dateStr = `${year}${month}${day}`;
+    const settingsPath = this.plugin.settings.calendarFilesPath || "Daily Notes";
+    return `${settingsPath}/${dateStr}_daily_notes_kanban.md`;
+  }
+  async createDailyKanbanFile(date) {
+    const dailyNotePath = this.getDailyNotePath(date);
+    try {
+      const existingFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
+      if (existingFile instanceof import_obsidian.TFile) {
+        console.log("[CALENDAR] Daily kanban file already exists:", dailyNotePath);
+        return;
+      }
+      const formattedDate = date.toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric"
+      });
+      const content = `---
+kanban-plugin: board
+---
+
+## \u{1F4CB} To Do
+
+
+
+## \u{1F6A7} In Progress
+
+
+
+## \u2705 Done
+
+
+
+
+
+%% kanban:settings
+\`\`\`
+{"kanban-plugin":"board"}
+\`\`\`
+%%
+`;
+      await this.app.vault.create(dailyNotePath, content);
+      console.log("[CALENDAR] Created daily kanban file:", dailyNotePath);
+      await this.loadKanbanBoards();
+      if (this.kanbanSelector) {
+        this.kanbanSelector.value = dailyNotePath;
+        this.plugin.settings.kanbanBoardPath = dailyNotePath;
+        await this.plugin.saveSettings();
+        await this.loadKanbanTasks(dailyNotePath);
+        if (this.openFileButton) {
+          this.openFileButton.style.opacity = "1";
+          this.openFileButton.style.cursor = "pointer";
+        }
+      }
+      new import_obsidian.Notice(`Created daily kanban: ${dailyNotePath.split("/").pop()}`);
+    } catch (error) {
+      console.error("[CALENDAR] Failed to create daily kanban file:", error);
+      new import_obsidian.Notice("Failed to create daily kanban file");
+    }
+  }
+  loadCalendarView() {
+    const calendarContent = this.container?.querySelector('.sidebar-content[data-content="calendar"]');
+    if (!calendarContent) return;
+    calendarContent.empty();
+    const miniCalendar = calendarContent.createDiv("mini-calendar");
+    this.createMiniCalendar(miniCalendar);
+    const todayTasks = calendarContent.createDiv("today-tasks");
+    todayTasks.createEl("h3", { text: "Today" });
+    const tasksList = todayTasks.createDiv("kanban-style-tasks");
+    this.loadTodayTasks(tasksList);
+  }
+  createMiniCalendar(container) {
+    const now = /* @__PURE__ */ new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const today = now.getDate();
+    const header = container.createDiv("calendar-header");
+    header.createEl("h4", { text: now.toLocaleDateString("en-US", { month: "long", year: "numeric" }) });
+    const grid = container.createDiv("calendar-grid");
+    const dayHeaders = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    dayHeaders.forEach((day) => {
+      grid.createEl("div", { text: day, cls: "calendar-day-header" });
+    });
+    const firstDay = new Date(year, month, 1).getDay();
+    for (let i = 0; i < firstDay; i++) {
+      grid.createDiv("calendar-day empty");
+    }
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayEl = grid.createDiv("calendar-day");
+      dayEl.textContent = day.toString();
+      if (day === today) {
+        dayEl.classList.add("today");
+      }
+      dayEl.onclick = () => {
+        const date = new Date(year, month, day);
+        const dateStr = date.toISOString().split("T")[0];
+        const dailyNoteName = `Daily Note ${dateStr}`;
+        const file = this.app.vault.getAbstractFileByPath(dailyNoteName);
+        if (file instanceof import_obsidian.TFile) {
+          this.app.workspace.getLeaf().openFile(file);
+        } else {
+          this.app.vault.create(dailyNoteName, `# ${dailyNoteName}
+
+## Tasks
+
+## Notes
+`);
+          const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
+          if (newFile instanceof import_obsidian.TFile) {
+            this.app.workspace.getLeaf().openFile(newFile);
+          }
+        }
+      };
+    }
+  }
+  loadTodayTasks(container) {
+    const today = /* @__PURE__ */ new Date();
+    const dailyNotePath = this.getDailyNotePath(today);
+    const file = this.app.vault.getAbstractFileByPath(dailyNotePath);
+    if (file instanceof import_obsidian.TFile) {
+      this.app.vault.read(file).then((content) => {
+        this.displayKanbanTasks(container, content, dailyNotePath);
+      }).catch((err) => {
+        console.error("[CALENDAR] Failed to read daily kanban file:", err);
+        container.createEl("p", { text: "Failed to load today's tasks", cls: "error-message" });
+      });
+    } else {
+      const emptyState = container.createDiv("empty-state");
+      emptyState.createEl("p", { text: "No tasks for today. Click on a date in the mini calendar to create a daily note." });
+    }
+  }
+  displayKanbanTasks(container, content, filePath) {
+    const columnRegex = /^## (.+)$/gm;
+    const columns = [];
+    let match;
+    let currentColumn = null;
+    let currentSection = "";
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const columnMatch = line.match(/^## (.+)$/);
+      if (columnMatch) {
+        if (currentColumn) {
+          columns.push(currentColumn);
+        }
+        currentColumn = {
+          title: columnMatch[1],
+          tasks: []
+        };
+        continue;
+      }
+      const taskMatch = line.match(/^- \[([ x])\] (.+)$/);
+      if (taskMatch && currentColumn) {
+        const completed = taskMatch[1] === "x";
+        const taskText = taskMatch[2];
+        const cleanTaskText = taskText.replace(/ - 🍎 \d+:\d{2}$/, "").replace(/ - \d+:\d{2}$/, "");
+        currentColumn.tasks.push({
+          text: cleanTaskText,
+          completed
+        });
+      }
+    }
+    if (currentColumn) {
+      columns.push(currentColumn);
+    }
+    if (columns.length > 0) {
+      const columnsContainer = container.createDiv("kanban-columns");
+      columns.forEach((column) => {
+        const columnEl = columnsContainer.createDiv("kanban-column");
+        columnEl.createEl("h4", { text: column.title });
+        const tasksList = columnEl.createDiv("column-tasks");
+        if (column.tasks.length === 0) {
+          tasksList.createEl("p", { text: "No tasks", cls: "empty-column" });
+        } else {
+          column.tasks.forEach((task) => {
+            const taskEl = tasksList.createDiv("kanban-task");
+            const checkbox = taskEl.createEl("input", { type: "checkbox" });
+            checkbox.checked = task.completed;
+            const taskTextEl = taskEl.createSpan("task-text");
+            taskTextEl.textContent = task.text;
+            if (task.completed) {
+              taskEl.classList.add("completed");
+            }
+          });
+        }
+      });
+    } else {
+      container.createEl("p", { text: "No tasks found for today." });
+    }
+  }
+  // Helper method to create control buttons with consistent styling
+  createControlButton(container, options) {
+    const button = container.createEl("span", {
+      cls: `control-button ${options.disabled ? "control-button-disabled" : ""}`,
+      attr: { "aria-label": options.ariaLabel }
+    });
+    const iconEl = button.createDiv("control-icon");
+    iconEl.innerHTML = options.icon;
+    const textEl = button.createDiv("control-text");
+    textEl.textContent = options.text;
+    button.addEventListener("click", options.onClick);
+    return button;
+  }
   initializeSvgElements() {
     const svgNS = "http://www.w3.org/2000/svg";
+    let settingsBtn;
+    let playBtn;
+    let resetBtn;
+    let endCycleBtn;
     const bgCircle = document.createElementNS(svgNS, "circle");
     bgCircle.setAttribute("class", "circle-bg");
     bgCircle.setAttribute("r", "45");
@@ -168,54 +667,78 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       console.error("Timer container not found");
       return;
     }
+    const taskContextDiv = timerContainer.createDiv("task-context-display");
+    this.updateTaskContextDisplay();
     const btnGroup = timerContainer.createDiv({ cls: "btn-group" });
-    const playBtn = btnGroup.createEl("span", { cls: "control-icon" });
-    playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
-    playBtn.addEventListener("click", () => {
-      if (!this.plugin.isRunning) {
-        if (this.plugin.timeRemaining === this.plugin.getTotalTime()) {
-          if (this.plugin.currentMode === "work") {
-            this.plugin.startPomodoro();
+    const mainControls = btnGroup.createDiv({ cls: "btn-group-main" });
+    const secondaryControls = btnGroup.createDiv({ cls: "btn-group-secondary" });
+    settingsBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m4.22-13.22l4.24 4.24m-4.24 4.24l4.24 4.24M20 12h-6m-6 0H2m13.22 4.22l-4.24 4.24m-4.24-4.24l-4.24 4.24"></path></svg>',
+      text: "Settings",
+      ariaLabel: "Open Pomodoro Settings",
+      onClick: () => {
+        this.app.setting.open();
+        this.app.setting.openTabById("enhanced-pomodoro");
+      }
+    });
+    playBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
+      text: "Play",
+      ariaLabel: "Start/Pause Timer",
+      onClick: () => {
+        if (!this.plugin.isRunning) {
+          if (this.plugin.timeRemaining === this.plugin.getTotalTime()) {
+            if (this.plugin.currentMode === "work") {
+              this.plugin.startPomodoro();
+            } else {
+              this.plugin.isRunning = true;
+              this.plugin.startTimer();
+            }
           } else {
-            this.plugin.isRunning = true;
-            this.plugin.startTimer();
+            this.plugin.togglePause();
           }
         } else {
           this.plugin.togglePause();
         }
-      } else {
-        this.plugin.togglePause();
       }
     });
-    const settingsBtn = btnGroup.createEl("span", {
-      cls: "control-icon",
-      attr: { "aria-label": "Open Pomodoro Settings" }
+    const quickBreakBtn = this.createControlButton(mainControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+      text: "Quick Break",
+      ariaLabel: this.plugin.settings.enableQuickBreak ? `Quick ${this.plugin.settings.quickBreakDuration} min break` : "Quick break disabled",
+      onClick: () => {
+        if (this.plugin.settings.enableQuickBreak) {
+          this.plugin.startQuickBreak();
+        }
+      },
+      disabled: !this.plugin.settings.enableQuickBreak
     });
-    settingsBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m4.22-13.22l4.24 4.24m-4.24 4.24l4.24 4.24M20 12h-6m-6 0H2m13.22 4.22l-4.24 4.24m-4.24-4.24l-4.24 4.24"></path></svg>`;
-    settingsBtn.onclick = () => {
-      this.app.setting.open();
-      this.app.setting.openTabById("enhanced-pomodoro");
-    };
-    const quickBreakBtn = btnGroup.createEl("span", {
-      cls: `control-icon ${!this.plugin.settings.enableQuickBreak ? "control-icon-disabled" : ""}`,
-      attr: { "aria-label": this.plugin.settings.enableQuickBreak ? `Quick ${this.plugin.settings.quickBreakDuration} min break` : "Quick break disabled" }
-    });
-    quickBreakBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
-    quickBreakBtn.onclick = () => {
-      if (this.plugin.settings.enableQuickBreak) {
-        this.plugin.startQuickBreak();
-      }
-    };
     this.quickBreakButton = quickBreakBtn;
-    const resetBtn = btnGroup.createEl("span", { cls: "control-icon" });
-    resetBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>`;
-    resetBtn.onclick = () => {
-      this.plugin.resetTimer();
-    };
+    resetBtn = this.createControlButton(secondaryControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>',
+      text: "Reset",
+      ariaLabel: "Reset Timer",
+      onClick: () => {
+        this.plugin.resetTimer();
+      }
+    });
+    endCycleBtn = this.createControlButton(secondaryControls, {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>',
+      text: "End Cycle",
+      ariaLabel: "End Current Cycle",
+      onClick: () => {
+        if ("endCurrentCycle" in this.plugin && typeof this.plugin.endCurrentCycle === "function") {
+          this.plugin.endCurrentCycle();
+        }
+      }
+    });
     this.modeSpan = modeText;
     this.timeSpan = timeText;
     this.progressCircle = progressCircle;
     this.playBtn = playBtn;
+    this.settingsBtn = settingsBtn;
+    this.resetBtn = resetBtn;
+    this.endCycleBtn = endCycleBtn;
     this.debugStartDot = debugStartDot;
     this.debugEndDot = debugEndDot;
     this.setupDebugHandlers();
@@ -248,14 +771,49 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     const minutes = Math.floor(timeRemaining / 60);
     const seconds = Math.floor(timeRemaining % 60);
     this.timeSpan.textContent = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-    const modeText = this.plugin.currentMode === "work" ? "Work" : this.plugin.currentMode === "shortBreak" ? "Short Break" : "Long Break";
+    let modeText;
+    if (this.plugin.currentMode === "work") {
+      modeText = "Work";
+    } else if (this.plugin.currentMode === "shortBreak") {
+      const hasQuickBreakState = this.plugin.quickBreakSavedState;
+      modeText = hasQuickBreakState ? "Quick Break" : "Short Break";
+    } else {
+      modeText = "Long Break";
+    }
+    const currentPhase = this.plugin.getCurrentPhase();
+    if (currentPhase && currentPhase.name) {
+      modeText = currentPhase.name;
+    }
     this.modeSpan.textContent = modeText;
     this.updateProgress();
-    if (this.playBtn) {
-      if (this.plugin.isRunning) {
-        this.playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+    if (this.quickBreakButton) {
+      const enabled = this.plugin.settings.enableQuickBreak;
+      if (!enabled) {
+        this.quickBreakButton.addClass("control-icon-disabled");
+        this.quickBreakButton.setAttribute("aria-label", "Quick break disabled");
       } else {
-        this.playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        this.quickBreakButton.removeClass("control-icon-disabled");
+        const hasQuickBreakState = this.plugin.quickBreakSavedState;
+        this.quickBreakButton.setAttribute("aria-label", hasQuickBreakState ? "Quick break running (will resume previous session)" : `Quick ${this.plugin.settings.quickBreakDuration} min break`);
+      }
+    }
+    if (this.playBtn) {
+      const iconEl = this.playBtn.querySelector(".control-icon");
+      const textEl = this.playBtn.querySelector(".control-text");
+      if (this.plugin.isRunning) {
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+        }
+        if (textEl) {
+          textEl.textContent = "Pause";
+        }
+      } else {
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        }
+        if (textEl) {
+          textEl.textContent = "Play";
+        }
       }
     }
     this.updateDebugDots();
@@ -396,7 +954,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     if (!this.plugin.settings?.debugMode) {
       return;
     }
-    const totalMinutes = this.plugin.getTotalMinutes ? this.plugin.getTotalMinutes() : 25;
+    const totalMinutes = Math.floor(this.plugin.getTotalTime() / 60);
     const snapInterval = 5;
     for (let minutes = 0; minutes < totalMinutes - 5; minutes += snapInterval) {
       if (minutes === 0) continue;
@@ -461,19 +1019,22 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     }
     this.updateSnapIndicators();
     if (this.playBtn) {
+      const iconEl = this.playBtn.querySelector(".control-icon");
+      const textEl = this.playBtn.querySelector(".control-text");
       if (this.plugin.isRunning) {
-        this.playBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" 
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="6" y="4" width="4" height="16"></rect>
-            <rect x="14" y="4" width="4" height="16"></rect>
-          </svg>`;
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+        }
+        if (textEl) {
+          textEl.textContent = "Pause";
+        }
       } else {
-        this.playBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" 
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>`;
+        if (iconEl) {
+          iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        }
+        if (textEl) {
+          textEl.textContent = "Play";
+        }
       }
     }
   }
@@ -520,28 +1081,230 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         margin-top: 1rem;
       }
       
-      .control-icon {
+      .btn-group-main {
+        display: flex;
+        gap: 0.5rem;
+      }
+      
+      .btn-group-secondary {
+        display: flex;
+        gap: 0.25rem;
+        margin-left: 1rem;
+      }
+      
+      .control-button {
         cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      
+      .control-button:active {
+        background: var(--interactive-accent);
+      }
+      
+      .control-button-disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      
+      .control-button-disabled:hover {
+        background: transparent;
+      }
+      
+      .control-button:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .control-icon {
+        display: flex;
+        align-items: center;
+      }
+      
+      .control-text {
+        font-size: 0.8em;
+        white-space: nowrap;
+      }
+      
+      /* Legacy support for old control-icon class */
+      .control-icon.control-icon {
         padding: 0.5rem;
         border-radius: 4px;
         transition: background-color 0.2s;
       }
       
-      .control-icon:active {
+      .control-icon.control-icon:active {
         background: var(--interactive-accent);
       }
       
-      .control-icon-disabled {
+      .control-icon.control-icon-disabled {
         opacity: 0.4;
         cursor: not-allowed;
       }
       
-      .control-icon-disabled:hover {
+      .control-icon.control-icon-disabled:hover {
         background: transparent;
       }
       
-      .control-icon:hover {
+      .control-icon.control-icon:hover {
         background-color: var(--background-modifier-hover);
+      }
+      
+      /* Sidebar tabs */
+      .sidebar-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--background-modifier-border);
+      }
+      
+      .sidebar-tab {
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+        flex: 1;
+        text-align: center;
+      }
+      
+      .sidebar-tab:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .sidebar-tab.active {
+        border-bottom-color: var(--interactive-accent);
+        color: var(--interactive-accent);
+        font-weight: 500;
+      }
+      
+      .sidebar-content-container {
+        position: relative;
+        flex: 1;
+        overflow: hidden;
+      }
+      
+      .sidebar-content {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: auto;
+        padding: 1rem;
+      }
+      
+      /* Calendar styles */
+      .mini-calendar {
+        margin-bottom: 1.5rem;
+      }
+      
+      .calendar-header {
+        text-align: center;
+        margin-bottom: 0.5rem;
+      }
+      
+      .calendar-header h4 {
+        margin: 0;
+        font-size: 1.1em;
+        color: var(--text-normal);
+      }
+      
+      .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 2px;
+        font-size: 0.8em;
+      }
+      
+      .calendar-day-header {
+        text-align: center;
+        font-weight: 600;
+        color: var(--text-muted);
+        padding: 0.25rem;
+      }
+      
+      .calendar-day {
+        aspect-ratio: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+      
+      .calendar-day:hover {
+        background-color: var(--background-modifier-hover);
+      }
+      
+      .calendar-day.today {
+        background-color: var(--interactive-accent);
+        color: var(--text-on-accent);
+        font-weight: 600;
+      }
+      
+      .calendar-day.empty {
+        cursor: default;
+      }
+      
+      .calendar-day.empty:hover {
+        background-color: transparent;
+      }
+      
+      /* Kanban-style tasks */
+      .kanban-column {
+        background: var(--background-secondary);
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      
+      .kanban-column h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.9em;
+        color: var(--text-normal);
+      }
+      
+      .task-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      
+      .kanban-task {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: var(--background-primary);
+        border-radius: 4px;
+        border: 1px solid var(--background-modifier-border);
+      }
+      
+      .kanban-task.completed {
+        opacity: 0.6;
+      }
+      
+      .kanban-task input[type="checkbox"] {
+        margin: 0;
+      }
+      
+      .today-tasks h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1em;
+        color: var(--text-normal);
+      }
+      
+      /* Task context display */
+      .task-context-display {
+        font-size: 0.85em;
+        color: var(--text-muted);
+        text-align: center;
+        padding: 0.5rem 0;
+        border-top: 1px solid var(--background-modifier-border);
+        border-bottom: 1px solid var(--background-modifier-border);
+        margin: 0.5rem 0;
       }
       
       .pomodoro-controls {
@@ -693,12 +1456,15 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     }, 5e3);
   }
   // Column Detection Helper Functions
+  normalizeColumnTitle(columnTitle) {
+    return columnTitle.toLowerCase().replace(/\s*\([^)]*\)\s*$/, "").replace(/[^\w\s#-]/g, "").replace(/\s+/g, " ").trim();
+  }
   isProgressColumn(columnTitle) {
-    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, "").trim();
+    const normalized = this.normalizeColumnTitle(columnTitle);
     return normalized.includes("in progress") || normalized.includes("phase progress") || normalized.includes("current tasks") || normalized.includes("phase completion") || normalized === "doing" || normalized === "progress";
   }
   isDoneColumn(columnTitle) {
-    const normalized = columnTitle.toLowerCase().replace(/\s*\(\d+\)$/, "").trim();
+    const normalized = this.normalizeColumnTitle(columnTitle);
     return normalized.includes("done") || // This catches "Done - Phase 1 (Code)" 
     normalized.includes("\u2705") || // Catches any column with checkmark emoji
     normalized.includes("completed") || normalized.includes("finished") || normalized === "complete";
@@ -718,9 +1484,13 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     });
     return columns;
   }
-  async moveTaskToColumn(taskId, targetColumnType) {
+  async moveTaskToColumn(taskId, targetColumnType, explicitTargetColumnTitle) {
     try {
-      const boardPath = this.plugin.settings.kanbanBoardPath;
+      let boardPath = this.plugin.settings.kanbanBoardPath;
+      const idMatch = taskId.match(/^task-(.+)-(\d+)$/);
+      if (idMatch) {
+        boardPath = idMatch[1];
+      }
       if (!boardPath) return false;
       const file = this.app.vault.getAbstractFileByPath(boardPath);
       if (!(file instanceof import_obsidian.TFile)) return false;
@@ -746,7 +1516,8 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       const columns = [];
       let lastColumnStart = -1;
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
+        const rawLine = lines[i];
+        const line = rawLine.trim();
         if (line.startsWith("## ")) {
           if (lastColumnStart >= 0) {
             columns[columns.length - 1].endIndex = i - 1;
@@ -761,10 +1532,22 @@ var CircularTimerView = class extends import_obsidian.ItemView {
             }
           }
         }
-        if ((line.startsWith("- [ ]") || line.startsWith("- [x]")) && line.includes(taskText)) {
-          taskLine = lines[i];
+        const lineForMatch = line.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
+        if ((lineForMatch.startsWith("- [ ]") || lineForMatch.startsWith("- [x]")) && lineForMatch.includes(taskText)) {
+          taskLine = rawLine;
           taskLineIndex = i;
           console.log("[MOVE TASK] Found task at line", i, ":", line);
+        }
+      }
+      if (explicitTargetColumnTitle) {
+        const normalizedTitle = this.normalizeColumnTitle(explicitTargetColumnTitle);
+        const explicitColumn = columns.find((c) => this.normalizeColumnTitle(c.name) === normalizedTitle);
+        if (explicitColumn) {
+          targetColumnIndex = explicitColumn.startIndex;
+          targetColumnEndIndex = explicitColumn.endIndex;
+          console.log("[MOVE TASK] Using explicit target column:", explicitTargetColumnTitle, "at line", targetColumnIndex);
+        } else {
+          console.log("[MOVE TASK] Explicit target column not found, falling back:", explicitTargetColumnTitle);
         }
       }
       if (targetColumnIndex >= 0) {
@@ -792,14 +1575,6 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         if (insertIndex <= targetColumnEndIndex && lines[insertIndex]?.trim() === "") {
           insertIndex++;
         }
-        let lastTaskIndex = insertIndex - 1;
-        for (let i = insertIndex; i <= targetColumnEndIndex; i++) {
-          const line = lines[i].trim();
-          if (line.startsWith("- [ ]") || line.startsWith("- [x]")) {
-            lastTaskIndex = i;
-          }
-        }
-        insertIndex = lastTaskIndex + 1;
         if (targetColumnType === "done" && taskLine.includes("- [ ]")) {
           taskLine = taskLine.replace("- [ ]", "- [x]");
         }
@@ -829,6 +1604,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
   // Track last updated timer value per task
   async updateTaskInKanbanFile(taskId, timeString) {
     if (!this.plugin.settings.updateTaskTimerInFile) return;
+    if (!this.plugin.isRunning || this.plugin.currentMode !== "work") {
+      return;
+    }
     if (!timeString || timeString === "0:00") {
       return;
     }
@@ -897,13 +1675,9 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         const taskTextEl = task.querySelector(".task-text");
         if (taskTextEl && taskTextEl.textContent === taskText) {
           const htmlTask = task;
+          const taskId = htmlTask.getAttribute("data-task-id") || "";
           const timerEl = htmlTask.querySelector(".task-timer");
-          if (timerEl) {
-            const newTaskId = htmlTask.getAttribute("data-task-id") || "";
-            this.activeTaskId = newTaskId;
-            this.plugin.settings.currentTask = newTaskId;
-            htmlTask.classList.add("pomodoro-task-active");
-          }
+          this.selectTask(taskId, htmlTask, timerEl);
         }
       });
     }
@@ -915,19 +1689,35 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     }
     const containerStyles = window.getComputedStyle(this.tasksContainer);
     console.log("[SCROLL] Container overflow-x:", containerStyles.overflowX);
-    const containerRect = this.tasksContainer.getBoundingClientRect();
-    const columnRect = columnElement.getBoundingClientRect();
-    const scrollLeft = columnElement.offsetLeft - 20;
-    this.tasksContainer.scrollLeft = scrollLeft;
-    console.log("[SCROLL] Scrolling to column:", {
-      columnLeft: columnElement.offsetLeft,
-      columnRect: columnRect.left,
-      containerRect: containerRect.left,
-      scrollTo: scrollLeft,
-      currentScroll: this.tasksContainer.scrollLeft,
-      containerWidth: this.tasksContainer.offsetWidth,
-      containerScrollWidth: this.tasksContainer.scrollWidth
-    });
+    if (containerStyles.overflowX === "visible") {
+      this.tasksContainer.style.overflowX = "auto";
+    }
+    setTimeout(() => {
+      if (!this.tasksContainer) {
+        console.log("[SCROLL] Tasks container no longer exists");
+        return;
+      }
+      const scrollLeft = columnElement.offsetLeft - 20;
+      const maxScroll = this.tasksContainer.scrollWidth - this.tasksContainer.clientWidth;
+      const finalScrollLeft = Math.max(0, Math.min(scrollLeft, maxScroll));
+      if (this.tasksContainer.scrollTo) {
+        this.tasksContainer.scrollTo({
+          left: finalScrollLeft,
+          behavior: "smooth"
+        });
+      }
+      if (this.tasksContainer.scrollLeft !== finalScrollLeft) {
+        this.tasksContainer.scrollLeft = finalScrollLeft;
+      }
+      console.log("[SCROLL] Scrolling to column:", {
+        columnLeft: columnElement.offsetLeft,
+        scrollTo: finalScrollLeft,
+        currentScroll: this.tasksContainer.scrollLeft,
+        containerWidth: this.tasksContainer.offsetWidth,
+        containerScrollWidth: this.tasksContainer.scrollWidth,
+        maxScroll
+      });
+    }, 100);
   }
   async addKanbanBoardSelector(container) {
     let selectorContainer = null;
@@ -984,6 +1774,25 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.refreshButton.style.display = "flex";
     this.refreshButton.style.alignItems = "center";
     this.refreshButton.style.justifyContent = "center";
+    this.openFileButton = selectorContainer.createEl("button", {
+      cls: "clickable-icon",
+      attr: { "aria-label": "Open current Kanban file" }
+    });
+    if (!this.openFileButton) {
+      console.error("Failed to create open file button");
+      return;
+    }
+    this.openFileButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>';
+    this.openFileButton.style.border = "none";
+    this.openFileButton.style.background = "var(--background-modifier-form-field)";
+    this.openFileButton.style.borderRadius = "4px";
+    this.openFileButton.style.padding = "4px";
+    this.openFileButton.style.cursor = "pointer";
+    this.openFileButton.style.display = "flex";
+    this.openFileButton.style.alignItems = "center";
+    this.openFileButton.style.justifyContent = "center";
+    this.openFileButton.style.opacity = "0.5";
+    this.openFileButton.style.cursor = "not-allowed";
     await this.loadKanbanBoards();
     if (this.plugin.settings.kanbanBoardPath && this.kanbanSelector) {
       if (this.kanbanSelector.value !== this.plugin.settings.kanbanBoardPath) {
@@ -994,6 +1803,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         try {
           await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
           console.log("[Kanban Startup] Tasks loaded successfully");
+          this.updateTaskContextDisplay();
         } catch (error) {
           console.error("[Kanban Startup] Failed loading tasks:", error);
         }
@@ -1001,6 +1811,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         console.log("[Kanban Startup] Previous board no longer exists:", this.plugin.settings.kanbanBoardPath);
         this.plugin.settings.kanbanBoardPath = "";
         await this.plugin.saveSettings();
+        this.updateTaskContextDisplay();
       }
     } else {
       console.log("[Kanban Startup] No previous board to restore");
@@ -1041,6 +1852,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         } catch (error) {
           console.error("Failed loading Kanban tasks:", error);
         }
+        this.updateTaskContextDisplay();
+        if (this.openFileButton) {
+          if (selectedPath) {
+            this.openFileButton.style.opacity = "1";
+            this.openFileButton.style.cursor = "pointer";
+          } else {
+            this.openFileButton.style.opacity = "0.5";
+            this.openFileButton.style.cursor = "not-allowed";
+          }
+        }
         console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
         if (this.plugin.refreshKanbanButtons) {
           this.plugin.refreshKanbanButtons(true);
@@ -1053,6 +1874,27 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         await this.loadKanbanBoards();
         if (this.plugin.refreshKanbanButtons) {
           this.plugin.refreshKanbanButtons(true);
+        }
+      });
+    }
+    if (this.openFileButton) {
+      this.openFileButton.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const currentPath = this.plugin.settings.kanbanBoardPath;
+        if (!currentPath) {
+          new import_obsidian.Notice("No Kanban file selected");
+          return;
+        }
+        try {
+          const file = this.app.vault.getAbstractFileByPath(currentPath);
+          if (file instanceof import_obsidian.TFile) {
+            await this.app.workspace.getLeaf(true).openFile(file);
+          } else {
+            new import_obsidian.Notice("Kanban file not found");
+          }
+        } catch (error) {
+          console.error("Failed to open Kanban file:", error);
+          new import_obsidian.Notice("Failed to open Kanban file");
         }
       });
     }
@@ -1177,6 +2019,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         return;
       }
       const tasks = [];
+      let allColumnNames = [];
       try {
         const kanbanData = JSON.parse(content);
         if (kanbanData.lists && Array.isArray(kanbanData.lists)) {
@@ -1213,6 +2056,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
             let columnName = lines[0].trim();
             columnName = columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, "").replace(/\([^)]*\)/g, "").replace(/[#*_~`]/g, "").trim();
             if (!columnName) continue;
+            allColumnNames.push(columnName);
             for (let i = 1; i < lines.length; i++) {
               const line = lines[i].trim();
               const checkboxMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
@@ -1280,13 +2124,6 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           }
         }
       }
-      if (tasks.length === 0) {
-        this.tasksContainer.createEl("p", {
-          text: "No tasks found in this Kanban board",
-          cls: "pomodoro-no-tasks"
-        });
-        return;
-      }
       const tasksByColumn = /* @__PURE__ */ new Map();
       for (const task of tasks) {
         if (!tasksByColumn.has(task.column)) {
@@ -1294,17 +2131,33 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         }
         tasksByColumn.get(task.column)?.push(task);
       }
-      const sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
-        const aCompleted = a.toLowerCase().includes("done") || a.toLowerCase().includes("complete");
-        const bCompleted = b.toLowerCase().includes("done") || b.toLowerCase().includes("complete");
-        if (aCompleted && !bCompleted) return 1;
-        if (!aCompleted && bCompleted) return -1;
-        return 0;
-      });
+      for (const colName of allColumnNames) {
+        if (!tasksByColumn.has(colName)) {
+          tasksByColumn.set(colName, []);
+        }
+      }
+      if (tasksByColumn.size === 0) {
+        this.tasksContainer.createEl("p", {
+          text: "No columns found in this Kanban board",
+          cls: "pomodoro-no-tasks"
+        });
+        return;
+      }
+      let sortedColumns;
+      if (allColumnNames.length > 0) {
+        sortedColumns = allColumnNames;
+      } else {
+        sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
+          const aCompleted = a.toLowerCase().includes("done") || a.toLowerCase().includes("complete");
+          const bCompleted = b.toLowerCase().includes("done") || b.toLowerCase().includes("complete");
+          if (aCompleted && !bCompleted) return 1;
+          if (!aCompleted && bCompleted) return -1;
+          return 0;
+        });
+      }
       let globalTaskIndex = 0;
       for (const columnName of sortedColumns) {
         const columnTasks = tasksByColumn.get(columnName) || [];
-        if (columnTasks.length === 0) continue;
         const taskGroup = this.tasksContainer.createEl("div", {
           cls: "pomodoro-task-group"
         });
@@ -1318,6 +2171,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
         const taskList = taskGroup.createEl("ul", { cls: "pomodoro-task-list" });
         taskList.addEventListener("dragover", (e) => {
           e.preventDefault();
+          if (!e.dataTransfer) return;
           e.dataTransfer.dropEffect = "move";
           taskList.classList.add("drag-over");
         });
@@ -1329,9 +2183,33 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           taskList.classList.remove("drag-over");
           const draggedTaskId = e.dataTransfer?.getData("text/plain");
           if (!draggedTaskId) return;
-          const targetColumnName = columnName;
-          new import_obsidian.Notice(`Moving task to "${targetColumnName}" - manual drag & drop (coming soon)`);
+          const targetTitle = columnName;
+          let targetType = null;
+          if (this.isDoneColumn(targetTitle)) {
+            targetType = "done";
+          } else if (this.isProgressColumn(targetTitle)) {
+            targetType = "progress";
+          } else {
+            targetType = "progress";
+          }
+          if (!targetType) return;
+          console.log("[DRAG & DROP] Moving task", draggedTaskId, "to column", targetTitle, "type", targetType);
+          const success = await this.moveTaskToColumn(draggedTaskId, targetType, targetTitle);
+          if (!success) {
+            new import_obsidian.Notice(`Could not move task to "${targetTitle}". Check Kanban file structure.`);
+          } else {
+            console.log("[DRAG & DROP] Move complete for", draggedTaskId, "\u2192", targetTitle);
+          }
         });
+        if (columnTasks.length === 0) {
+          const emptyState = taskList.createEl("li", {
+            cls: "pomodoro-empty-column",
+            text: "No tasks"
+          });
+          emptyState.style.opacity = "0.5";
+          emptyState.style.fontStyle = "italic";
+          emptyState.style.padding = "0.5rem";
+        }
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
           const taskItem = taskList.createEl("li", {
@@ -1351,6 +2229,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
           checkbox.addEventListener("change", async () => {
             task.completed = checkbox.checked;
             taskItem.toggleClass("task-completed", checkbox.checked);
+            await this.updateTaskCompletionState(taskId, checkbox.checked);
             if (checkbox.checked) {
               if (this.activeTaskId === taskId) {
                 console.log("[TASK COMPLETE] Clearing active task as it was just completed");
@@ -1362,38 +2241,70 @@ var CircularTimerView = class extends import_obsidian.ItemView {
                 const kanbanFileName = boardPath.split("/").pop()?.replace(".md", "") || "Unknown";
                 await this.logTaskTime(taskId, totalTime, kanbanFileName);
                 const minutes = Math.floor(totalTime / 60);
-                const seconds = Math.floor(totalTime % 60);
-                const finalTimeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-                this.lastKanbanUpdateTime = 0;
-                this.lastUpdateTimerValue.delete(taskId);
-                await this.updateTaskInKanbanFile(taskId, finalTimeString);
-                console.log(`[TASK COMPLETE] Task "${task.text}" completed with total time: ${finalTimeString}`);
+                const seconds = totalTime % 60;
+                const finalTimeStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+                await this.updateTaskInKanbanFile(taskId, finalTimeStr);
+              }
+              if (this.plugin.settings.autoMoveToDone) {
+                const currentGroupEl = taskItem.closest(".pomodoro-task-group");
+                const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
+                if (!this.isDoneColumn(currentColumnTitle)) {
+                  this.taskOriginalColumns.set(taskId, currentColumnTitle);
+                  console.log("[AUTO-MOVE] Storing original column for task:", currentColumnTitle);
+                  const doneColumns = this.findColumnsByType("done");
+                  if (doneColumns.length === 0) {
+                    console.log("[AUTO-MOVE] No Done column found");
+                    new import_obsidian.Notice('No "Done" column found on this board.');
+                  } else {
+                    const doneTitle = doneColumns[0].title;
+                    console.log("[AUTO-MOVE] Moving completed task to Done column:", doneTitle);
+                    const moved = await this.moveTaskToColumn(taskId, "done", doneTitle);
+                    if (moved) {
+                      new import_obsidian.Notice(`Task moved to "${doneTitle}"`);
+                      setTimeout(() => {
+                        const updatedDoneColumns = this.findColumnsByType("done");
+                        if (updatedDoneColumns.length > 0) {
+                          this.scrollToColumn(updatedDoneColumns[0].element);
+                        }
+                      }, 400);
+                    }
+                  }
+                }
               }
             } else {
-              console.log(`[TASK UNCOMPLETE] Task "${task.text}" unchecked - available for use`);
-            }
-            if (checkbox.checked && this.plugin.settings.autoMoveToDone) {
-              const currentGroupEl = taskItem.closest(".pomodoro-task-group");
-              const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
-              if (!this.isDoneColumn(currentColumnTitle)) {
-                const doneColumns = this.findColumnsByType("done");
-                if (doneColumns.length === 0) {
-                  new import_obsidian.Notice('No "Done" column found on this board. Consider disabling auto-move in settings.');
-                } else if (doneColumns.length > 1) {
-                  const columnNames = doneColumns.map((c) => c.title).join(", ");
-                  new import_obsidian.Notice(`Multiple done columns found: ${columnNames}. Consider disabling auto-move in settings.`);
-                } else {
-                  const doneTitle = doneColumns[0].title;
-                  const success = await this.moveTaskToColumn(taskId, "done");
-                  if (success) {
-                    new import_obsidian.Notice(`Task moved to "${doneTitle}"`);
-                    setTimeout(() => {
-                      const newDoneColumns = this.findColumnsByType("done");
-                      if (newDoneColumns.length > 0) {
-                        this.scrollToColumn(newDoneColumns[0].element);
-                      }
-                    }, 200);
-                  }
+              console.log("[TASK UNCOMPLETE] Moving task back:", task.text);
+              const originalColumn = this.taskOriginalColumns.get(taskId);
+              let targetColumnTitle = null;
+              let targetColumnType = "progress";
+              if (originalColumn) {
+                console.log("[TASK UNCOMPLETE] Restoring to original column:", originalColumn);
+                targetColumnTitle = originalColumn;
+                targetColumnType = this.isProgressColumn(originalColumn) ? "progress" : "progress";
+              } else {
+                const progressColumns = this.findColumnsByType("progress");
+                if (progressColumns.length > 0) {
+                  targetColumnTitle = progressColumns[0].title;
+                  console.log("[TASK UNCOMPLETE] No original column, using progress:", targetColumnTitle);
+                }
+              }
+              if (targetColumnTitle) {
+                const moved = await this.moveTaskToColumn(taskId, targetColumnType, targetColumnTitle);
+                if (moved) {
+                  this.taskOriginalColumns.delete(taskId);
+                  setTimeout(() => {
+                    const allColumns = this.findColumnsByType("progress").concat(this.findColumnsByType("done"));
+                    const targetCol = allColumns.find((c) => c.title === targetColumnTitle);
+                    if (targetCol) {
+                      this.scrollToColumn(targetCol.element);
+                      setTimeout(() => {
+                        const taskEl = targetCol.element.querySelector(`[data-task-id="${taskId}"]`);
+                        if (taskEl) {
+                          const timerEl = taskEl.querySelector(".task-timer");
+                          this.selectTask(taskId, taskEl, timerEl);
+                        }
+                      }, 200);
+                    }
+                  }, 400);
                 }
               }
             }
@@ -1467,36 +2378,15 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       this.warningTimeout = null;
     }
     const taskText = taskElement.querySelector(".task-text")?.textContent || "Unknown Task";
-    const kanbanFile = this.plugin.settings.kanbanBoardPath || "No Kanban Selected";
-    const kanbanFileName = kanbanFile.split("/").pop()?.replace(".md", "") || "Unknown";
-    if (this.activeTaskId && this.activeTaskId !== taskId) {
-      const prevTime = this.taskTimers.get(this.activeTaskId) || 0;
-      if (prevTime > 0) {
-        const minutes = Math.floor(prevTime / 60);
-        const seconds = Math.floor(prevTime % 60);
-        const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-        this.lastKanbanUpdateTime = 0;
-        this.lastUpdateTimerValue.delete(this.activeTaskId);
-        await this.updateTaskInKanbanFile(this.activeTaskId, timeString);
-      }
-    }
     this.lastUpdateTimerValue.delete(taskId);
     const isCompleted = taskElement.classList.contains("task-completed");
     const checkbox = taskElement.querySelector(".task-checkbox");
     if (isCompleted || checkbox && checkbox.checked) {
-      this.showCompletedTaskWarning(taskText);
       console.log("[TASK SELECTION] Cannot select completed task:", taskText);
       return;
     }
-    if (this.plugin.settings.restrictToProgressTasks) {
-      const groupEl = taskElement.closest(".pomodoro-task-group");
-      const columnTitle = groupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
-      if (!this.isProgressColumn(columnTitle)) {
-        this.showCompletedTaskWarning(`Task must be in progress column to start timer. Current: "${columnTitle}"`);
-        console.log("[TASK SELECTION] Task not in progress column:", columnTitle);
-        return;
-      }
-    }
+    const groupEl = taskElement.closest(".pomodoro-task-group");
+    const columnTitle = groupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
     if (this.plugin.settings.autoMoveToProgress) {
       const currentGroupEl = taskElement.closest(".pomodoro-task-group");
       const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
@@ -1552,7 +2442,6 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     console.log("  Previous Task ID:", this.activeTaskId || "None");
     console.log("  New Task ID:", taskId);
     console.log("  New Task Name:", taskText);
-    console.log("  Kanban File:", kanbanFile);
     console.log("  Timer Running:", this.plugin.isRunning);
     console.log("  Current Mode:", this.plugin.currentMode);
     if (this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === "work") {
@@ -1570,7 +2459,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       console.log("  Saved Previous Task Time:", Math.floor(newTime / 60) + ":" + String(Math.floor(newTime % 60)).padStart(2, "0"));
       const prevTaskParts = this.activeTaskId.match(/^task-(.+)-(\d+)$/);
       const prevKanbanPath = prevTaskParts ? prevTaskParts[1] : "";
-      const prevKanbanFileName = prevKanbanPath.split("/").pop()?.replace(".md", "") || kanbanFileName;
+      const prevKanbanFileName = prevKanbanPath.split("/").pop()?.replace(".md", "") || "Unknown";
       await this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName);
       console.log("  Task time logged for board:", prevKanbanFileName);
     }
@@ -1607,7 +2496,16 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     const seconds = Math.floor(totalTime % 60);
     const timeString = `${minutes}:${seconds.toString().padStart(2, "0")}`;
     timerElement.setText(` [${timeString}]`);
-    this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+    if (this.currentTaskElement) {
+      const textEl = this.currentTaskElement.querySelector(".task-text");
+      const key = textEl?.textContent?.trim();
+      if (key) {
+        this.taskTimersByText.set(key, totalTime);
+      }
+    }
+    if (this.plugin.isRunning && this.plugin.currentMode === "work") {
+      this.updateTaskInKanbanFile(this.activeTaskId, timeString);
+    }
   }
   // Call this method from the animation loop to update active task timer
   updateActiveTaskTimer() {
@@ -1809,8 +2707,21 @@ var DEFAULT_SETTINGS = {
   sessionsCompletedCount: 0,
   autoMoveToProgress: true,
   autoMoveToDone: true,
-  restrictToProgressTasks: false,
-  updateTaskTimerInFile: true
+  updateTaskTimerInFile: true,
+  showButtonTooltips: true,
+  buttonStyle: "icons+text",
+  responsiveButtons: true,
+  // Enable responsive layout by default
+  sidebarView: "mini-calendar",
+  calendarFilesPath: "Daily Notes",
+  // Default path for calendar files
+  autoCreateCalendarFiles: false,
+  // Don't auto-create by default (user choice)
+  enableScheduleSummary: true,
+  // Enable schedule summary generation
+  scheduleSummaryPath: "Pomodoro Schedule Summary.md",
+  perBoardProgressColumns: {}
+  // Empty object initially
 };
 var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   constructor() {
@@ -1961,7 +2872,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     try {
       await this.loadSettings();
       const currentSchedule = this.getCurrentSchedule();
-      this.timeRemaining = currentSchedule.workDuration * 60;
+      this.timeRemaining = this.getDurationForPhase("work") * 60;
       this.registerView(
         CIRCULAR_TIMER_VIEW,
         (leaf) => new CircularTimerView(leaf, this)
@@ -2060,6 +2971,63 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     return schedule;
   }
   /**
+   * Get the duration for the current phase, supporting both legacy and custom sequences
+   */
+  getDurationForPhase(phase) {
+    const schedule = this.getCurrentSchedule();
+    if (schedule.phases && schedule.phases.length > 0) {
+      const currentPhaseIndex = schedule.currentPhaseIndex || 0;
+      const currentPhase = schedule.phases[currentPhaseIndex];
+      if (currentPhase && currentPhase.type === phase) {
+        return currentPhase.duration;
+      }
+      const matchingPhase = schedule.phases.find((p) => p.type === phase);
+      return matchingPhase ? matchingPhase.duration : 25;
+    }
+    switch (phase) {
+      case "work":
+        return schedule.workDuration || 25;
+      case "shortBreak":
+        return schedule.shortBreakDuration || 5;
+      case "longBreak":
+        return schedule.longBreakDuration || 15;
+      default:
+        return 25;
+    }
+  }
+  /**
+   * Get the current phase information for custom sequences
+   */
+  getCurrentPhase() {
+    const schedule = this.getCurrentSchedule();
+    if (!schedule.phases || schedule.phases.length === 0) {
+      return {
+        type: this.currentMode,
+        duration: this.getDurationForPhase(this.currentMode),
+        name: this.currentMode.charAt(0).toUpperCase() + this.currentMode.slice(1)
+      };
+    }
+    const currentPhaseIndex = schedule.currentPhaseIndex || 0;
+    return schedule.phases[currentPhaseIndex] || null;
+  }
+  /**
+   * Advance to the next phase in custom sequence
+   */
+  advanceToNextPhase() {
+    const schedule = this.getCurrentSchedule();
+    if (!schedule.phases || schedule.phases.length === 0) {
+      return;
+    }
+    let currentIndex = schedule.currentPhaseIndex || 0;
+    currentIndex = (currentIndex + 1) % schedule.phases.length;
+    const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
+    if (scheduleIndex !== -1) {
+      this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+      this.saveSettings();
+    }
+    console.log("[Schedule] Advanced to phase", currentIndex, "of", schedule.phases.length);
+  }
+  /**
    * Gets a schedule by ID
    */
   getSchedule(scheduleId) {
@@ -2132,7 +3100,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   async startPomodoro() {
     if (this.isRunning) return;
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = schedule.workDuration * 60;
+    this.timeRemaining = (schedule.workDuration || 25) * 60;
     this.currentMode = "work";
     this.isRunning = true;
     this.startTimer();
@@ -2142,6 +3110,10 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     const schedule = this.getCurrentSchedule();
     if (!schedule.enableQuickBreak) {
       new import_obsidian2.Notice("Quick break is disabled in the current schedule");
+      return;
+    }
+    if (this.currentMode !== "work") {
+      new import_obsidian2.Notice("Quick break is only available during work sessions.");
       return;
     }
     const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
@@ -2176,31 +3148,34 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     }
     const savedState = this.quickBreakSavedState;
     this.quickBreakSavedState = null;
-    if (savedState.wasRunning) {
-      console.log("[Quick Break] Resuming timer -", savedState.previousMode, "with", Math.floor(savedState.previousTime / 60), "minutes left");
-      new import_obsidian2.Notice("Quick break over! Resuming timer...");
-      this.currentMode = savedState.previousMode;
-      this.timeRemaining = savedState.previousTime;
-      this.isRunning = true;
-      this.updateStatusBar();
-      const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
-      if (view) {
-        if ("updateDisplay" in view) {
-          view.updateDisplay();
-        }
-        if ("lastUpdateTime" in view) {
-          view.lastUpdateTime = Date.now();
-          console.log("[Quick Break] Task timer tracking reset");
-        }
+    this.currentMode = savedState.previousMode;
+    this.timeRemaining = savedState.previousTime;
+    this.isRunning = savedState.wasRunning;
+    this.updateStatusBar();
+    const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+    if (view) {
+      if ("updateDisplay" in view) {
+        view.updateDisplay();
       }
-      await this.logSession("quick_break_end");
-      this.startTimer();
-    } else {
-      console.log("[Quick Break] Timer was not running, resetting");
-      new import_obsidian2.Notice("Quick break over!");
-      await this.logSession("quick_break_end");
-      this.resetTimer();
+      if (savedState.wasRunning && "lastUpdateTime" in view) {
+        view.lastUpdateTime = Date.now();
+        console.log("[Quick Break] Task timer tracking reset");
+      }
     }
+    new import_obsidian2.Notice("Quick break over! Resuming previous session" + (savedState.wasRunning ? "" : " (timer paused)") + ".");
+    await this.logSession("quick_break_end");
+    if (savedState.wasRunning) {
+      this.startTimer();
+    }
+  }
+  async endCurrentCycle() {
+    if (this.quickBreakSavedState) {
+      console.log("[End Cycle] Ending quick break, restoring previous state");
+      await this.restoreAfterQuickBreak();
+      return;
+    }
+    console.log("[End Cycle] Ending current session phase");
+    await this.completeSession();
   }
   playSound(sound) {
     try {
@@ -2319,7 +3294,14 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     }
     this.currentMode = "work";
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = schedule.workDuration * 60;
+    if (schedule.phases && schedule.phases.length > 0) {
+      const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
+      if (scheduleIndex !== -1) {
+        this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
+        this.saveSettings();
+      }
+    }
+    this.timeRemaining = this.getDurationForPhase("work") * 60;
     this.sessionsCompleted = 0;
     this.settings.sessionsCompletedCount = 0;
     await this.saveSettings();
@@ -2352,16 +3334,36 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       this.sessionsCompleted++;
       this.settings.sessionsCompletedCount = this.sessionsCompleted;
       await this.saveSettings();
-      const isLongBreak = this.sessionsCompleted % 4 === 0;
-      this.currentMode = isLongBreak ? "longBreak" : "shortBreak";
-      this.timeRemaining = isLongBreak ? schedule.longBreakDuration * 60 : schedule.shortBreakDuration * 60;
       console.log("  \u2192 Work Complete! Sessions:", this.sessionsCompleted);
-      console.log("  \u2192 Long Break Check: " + this.sessionsCompleted + " % 4 = " + this.sessionsCompleted % 4);
-      console.log("  \u2192 Next Break Type:", isLongBreak ? "LONG BREAK (\u{1F386})" : "Short Break");
-      console.log("  \u2192 Break Duration:", Math.floor(this.timeRemaining / 60), "minutes");
-      new import_obsidian2.Notice(`Time for a ${isLongBreak ? "long" : "short"} break!`);
+      new import_obsidian2.Notice(`Work session complete!`);
       await this.logSession("work_complete");
-      this.playSound(isLongBreak ? "longbreak" : "shortbreak");
+      this.playSound("shortbreak");
+      let nextMode;
+      let nextDuration;
+      if (schedule.phases && schedule.phases.length > 0) {
+        this.advanceToNextPhase();
+        const nextPhase = this.getCurrentPhase();
+        if (nextPhase && (nextPhase.type === "shortBreak" || nextPhase.type === "longBreak")) {
+          nextMode = nextPhase.type;
+          nextDuration = nextPhase.duration;
+          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || nextPhase.type);
+        } else {
+          const isLongBreak = this.sessionsCompleted % 4 === 0;
+          nextMode = isLongBreak ? "longBreak" : "shortBreak";
+          nextDuration = this.getDurationForPhase(nextMode);
+          console.log("  \u2192 Fallback to Legacy Break Type:", nextMode);
+        }
+      } else {
+        const isLongBreak = this.sessionsCompleted % 4 === 0;
+        nextMode = isLongBreak ? "longBreak" : "shortBreak";
+        nextDuration = this.getDurationForPhase(nextMode);
+        console.log("  \u2192 Legacy Break Type:", nextMode, "Long Break:", isLongBreak);
+      }
+      this.currentMode = nextMode;
+      this.timeRemaining = nextDuration * 60;
+      console.log("  \u2192 Next Break Duration:", Math.floor(this.timeRemaining / 60), "minutes");
+      new import_obsidian2.Notice(`Time for a ${nextMode === "longBreak" ? "long" : "short"} break!`);
+      this.playSound(nextMode === "longBreak" ? "longbreak" : "shortbreak");
       this.updateStatusBar();
       if (schedule.autoStartNext === true) {
         console.log("  \u2192 Auto-start: YES - Starting break timer immediately");
@@ -2381,10 +3383,22 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       }
       console.log("  \u2192 Break Complete! Returning to work mode");
       this.currentMode = "work";
-      this.timeRemaining = schedule.workDuration * 60;
+      if (schedule.phases && schedule.phases.length > 0) {
+        this.advanceToNextPhase();
+        const nextPhase = this.getCurrentPhase();
+        if (nextPhase && nextPhase.type === "work") {
+          this.timeRemaining = nextPhase.duration * 60;
+          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || "Work");
+        } else {
+          this.timeRemaining = this.getDurationForPhase("work") * 60;
+          console.log("  \u2192 Fallback to default work duration");
+        }
+      } else {
+        this.timeRemaining = this.getDurationForPhase("work") * 60;
+      }
       new import_obsidian2.Notice("Break is over! Time to work!");
       await this.logSession("break_complete");
-      this.playSound(this.quickBreakSavedState ? "quickbreak" : "ding");
+      this.playSound("ding");
       this.updateStatusBar();
       if (schedule.autoStartNext === true) {
         console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
@@ -2415,13 +3429,13 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     const schedule = this.getCurrentSchedule();
     switch (this.currentMode) {
       case "work":
-        return schedule.workDuration * 60;
+        return (schedule.workDuration || 25) * 60;
       case "shortBreak":
-        return schedule.shortBreakDuration * 60;
+        return (schedule.shortBreakDuration || 5) * 60;
       case "longBreak":
-        return schedule.longBreakDuration * 60;
+        return (schedule.longBreakDuration || 15) * 60;
       default:
-        return schedule.workDuration * 60;
+        return (schedule.workDuration || 25) * 60;
     }
   }
   async activateView() {
@@ -2889,10 +3903,10 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       (slider) => slider.setLimits(1, 60, 1).setValue(this.plugin.settings.workDuration).onChange(async (value) => {
         console.log(`[Settings] Work duration changed from ${this.plugin.settings.workDuration} to ${value}`);
         this.plugin.settings.workDuration = value;
-        const currentSchedule = this.plugin.getCurrentSchedule();
-        if (currentSchedule) {
-          console.log(`[Settings] Updating current schedule '${currentSchedule.name}' workDuration to ${value}`);
-          currentSchedule.workDuration = value;
+        const currentSchedule2 = this.plugin.getCurrentSchedule();
+        if (currentSchedule2) {
+          console.log(`[Settings] Updating current schedule '${currentSchedule2.name}' workDuration to ${value}`);
+          currentSchedule2.workDuration = value;
         }
         await this.plugin.saveSettings();
         console.log("[Settings] Settings saved");
@@ -2910,9 +3924,9 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     new import_obsidian2.Setting(containerEl).setName("Short Break Duration (minutes)").setDesc("Duration of short breaks").addSlider(
       (slider) => slider.setLimits(1, 30, 1).setValue(this.plugin.settings.shortBreakDuration).onChange(async (value) => {
         this.plugin.settings.shortBreakDuration = value;
-        const currentSchedule = this.plugin.getCurrentSchedule();
-        if (currentSchedule) {
-          currentSchedule.shortBreakDuration = value;
+        const currentSchedule2 = this.plugin.getCurrentSchedule();
+        if (currentSchedule2) {
+          currentSchedule2.shortBreakDuration = value;
         }
         await this.plugin.saveSettings();
         this.plugin.resetTimer();
@@ -2925,9 +3939,9 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     new import_obsidian2.Setting(containerEl).setName("Long Break Duration (minutes)").setDesc("Duration of long breaks (after 4 sessions)").addSlider(
       (slider) => slider.setLimits(5, 60, 1).setValue(this.plugin.settings.longBreakDuration).onChange(async (value) => {
         this.plugin.settings.longBreakDuration = value;
-        const currentSchedule = this.plugin.getCurrentSchedule();
-        if (currentSchedule) {
-          currentSchedule.longBreakDuration = value;
+        const currentSchedule2 = this.plugin.getCurrentSchedule();
+        if (currentSchedule2) {
+          currentSchedule2.longBreakDuration = value;
         }
         await this.plugin.saveSettings();
         this.plugin.resetTimer();
@@ -2940,10 +3954,10 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     new import_obsidian2.Setting(containerEl).setName("Auto-start next session").setDesc("Automatically start the next session when one completes").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoStartNext).onChange(async (value) => {
         this.plugin.settings.autoStartNext = value;
-        const currentSchedule = this.plugin.getCurrentSchedule();
-        if (currentSchedule) {
-          currentSchedule.autoStartNext = value;
-          console.log(`[Settings] Updated autoStartNext for schedule '${currentSchedule.name}' to ${value}`);
+        const currentSchedule2 = this.plugin.getCurrentSchedule();
+        if (currentSchedule2) {
+          currentSchedule2.autoStartNext = value;
+          console.log(`[Settings] Updated autoStartNext for schedule '${currentSchedule2.name}' to ${value}`);
         }
         await this.plugin.saveSettings();
       })
@@ -2966,15 +3980,27 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Restrict to Progress tasks only").setDesc('Only allow tasks in "In Progress" column to start/continue timer').addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.restrictToProgressTasks).onChange(async (value) => {
-        this.plugin.settings.restrictToProgressTasks = value;
-        await this.plugin.saveSettings();
+    new import_obsidian2.Setting(containerEl).setName("Per-Board Progress Columns").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Progress Column Selection").setDesc("Configure preferred progress columns for each kanban board").addButton(
+      (button) => button.setButtonText("Configure Progress Columns").setCta().onClick(() => {
+        this.openProgressColumnConfig();
       })
     );
     new import_obsidian2.Setting(containerEl).setName("Update timer in Kanban file").setDesc("Show task timer (\u{1F34E} 1:23) directly in Kanban file text").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.updateTaskTimerInFile).onChange(async (value) => {
         this.plugin.settings.updateTaskTimerInFile = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Enable Schedule Summary").setDesc("Automatically generate schedule summary from task timer logs").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableScheduleSummary).onChange(async (value) => {
+        this.plugin.settings.enableScheduleSummary = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Schedule Summary Path").setDesc("Path to the schedule summary file").addText(
+      (text) => text.setPlaceholder("Pomodoro Schedule Summary.md").setValue(this.plugin.settings.scheduleSummaryPath).onChange(async (value) => {
+        this.plugin.settings.scheduleSummaryPath = value;
         await this.plugin.saveSettings();
       })
     );
@@ -3007,6 +4033,122 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         await this.plugin.saveSettings();
       });
     }).setDisabled(!this.plugin.settings.enableQuickBreak);
+    new import_obsidian2.Setting(containerEl).setName("Button Display Settings").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Button Style").setDesc("Choose how timer control buttons are displayed").addDropdown((dropdown) => {
+      dropdown.addOption("icons+text", "Icons + Text").addOption("text", "Text Only").addOption("icons", "Icons Only");
+      dropdown.setValue(this.plugin.settings.buttonStyle);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.buttonStyle = value;
+        await this.plugin.saveSettings();
+        const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view) {
+          view.updateButtonStyle();
+        }
+      });
+    });
+    new import_obsidian2.Setting(containerEl).setName("Show Button Tooltips").setDesc("Show tooltips on timer control buttons (only applies to icons-only mode)").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.showButtonTooltips).onChange(async (value) => {
+        this.plugin.settings.showButtonTooltips = value;
+        await this.plugin.saveSettings();
+        const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view) {
+          view.updateButtonTooltips();
+        }
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Responsive Button Layout").setDesc("Automatically switch to icons-only when sidebar width is less than 575px").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.responsiveButtons).onChange(async (value) => {
+        this.plugin.settings.responsiveButtons = value;
+        await this.plugin.saveSettings();
+        const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view) {
+          view.updateResponsiveLayout();
+        }
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Sidebar View").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Default Sidebar View").setDesc("Choose the default view when opening the sidebar").addDropdown((dropdown) => {
+      dropdown.addOption("mini-calendar", "Mini Calendar").addOption("calendar-tasks", "Calendar Tasks").addOption("manual", "Manual Kanban");
+      dropdown.setValue(this.plugin.settings.sidebarView);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.sidebarView = value;
+        await this.plugin.saveSettings();
+        const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view) {
+          view.switchSidebarView(value);
+        }
+      });
+    });
+    new import_obsidian2.Setting(containerEl).setName("Calendar Settings").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Calendar Files Path").setDesc("Directory where daily kanban files are stored").addText(
+      (text) => text.setPlaceholder("Daily Notes").setValue(this.plugin.settings.calendarFilesPath).onChange(async (value) => {
+        this.plugin.settings.calendarFilesPath = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Auto-Create Calendar Files").setDesc("Automatically create daily kanban files when accessing Calendar Tasks view").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoCreateCalendarFiles).onChange(async (value) => {
+        this.plugin.settings.autoCreateCalendarFiles = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Schedule Management").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Current Schedule").setDesc("Select the active schedule to use").addDropdown((dropdown) => {
+      this.plugin.settings.schedules.forEach((schedule) => {
+        dropdown.addOption(schedule.id, schedule.name);
+      });
+      dropdown.setValue(this.plugin.settings.currentScheduleId);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.currentScheduleId = value;
+        await this.plugin.saveSettings();
+        this.plugin.resetTimer();
+        this.display();
+      });
+    });
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    const scheduleInfoEl = containerEl.createDiv();
+    scheduleInfoEl.createEl("h3", { text: `Current Schedule: ${currentSchedule.name}` });
+    if (currentSchedule.phases && currentSchedule.phases.length > 0) {
+      const phasesList = scheduleInfoEl.createEl("ul");
+      currentSchedule.phases.forEach((phase, index) => {
+        const phaseItem = phasesList.createEl("li");
+        phaseItem.setText(`${index + 1}. ${phase.name || phase.type}: ${phase.duration} min`);
+      });
+    } else {
+      const legacyInfo = scheduleInfoEl.createEl("p");
+      legacyInfo.setText(`Work: ${currentSchedule.workDuration}min, Short Break: ${currentSchedule.shortBreakDuration}min, Long Break: ${currentSchedule.longBreakDuration}min`);
+    }
+    new import_obsidian2.Setting(containerEl).setName("Add New Schedule").setDesc("Create a new custom schedule with phases").addButton(
+      (button) => button.setButtonText("Add Schedule").onClick(async () => {
+        const scheduleName = await this.showScheduleNameDialog();
+        if (scheduleName) {
+          await this.addNewSchedule(scheduleName);
+          this.display();
+        }
+      })
+    );
+    if (currentSchedule.id !== "default") {
+      const editDeleteContainer = containerEl.createDiv();
+      editDeleteContainer.style.display = "flex";
+      editDeleteContainer.style.gap = "10px";
+      editDeleteContainer.style.marginTop = "10px";
+      const editButton = editDeleteContainer.createEl("button");
+      editButton.textContent = "Edit Schedule";
+      editButton.onclick = async () => {
+        await this.editSchedule(currentSchedule.id);
+        this.display();
+      };
+      const deleteButton = editDeleteContainer.createEl("button");
+      deleteButton.textContent = "Delete Schedule";
+      deleteButton.style.color = "red";
+      deleteButton.onclick = async () => {
+        const confirmed = await this.showConfirmDialog(`Delete schedule "${currentSchedule.name}"?`);
+        if (confirmed) {
+          await this.plugin.deleteSchedule(currentSchedule.id);
+          this.display();
+        }
+      };
+    }
     new import_obsidian2.Setting(containerEl).setName("Break Sounds").setHeading();
     new import_obsidian2.Setting(containerEl).setName("Quick Break Sound Preview").setDesc("Test the currently selected quick break sound").addButton(
       (button) => button.setButtonText("Test").onClick(() => {
@@ -3033,5 +4175,356 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         this.plugin.playSound("ding");
       })
     );
+  }
+  // Helper methods for schedule management
+  async showScheduleNameDialog() {
+    return new Promise((resolve) => {
+      const modal = new ScheduleNameModal(this.app, (name) => {
+        resolve(name);
+      }, () => {
+        resolve(null);
+      });
+      modal.open();
+    });
+  }
+  async addNewSchedule(name) {
+    const newSchedule = {
+      name,
+      phases: [
+        { type: "work", duration: 25, name: "Work" },
+        { type: "shortBreak", duration: 5, name: "Short Break" },
+        { type: "work", duration: 25, name: "Work" },
+        { type: "shortBreak", duration: 5, name: "Short Break" },
+        { type: "work", duration: 25, name: "Work" },
+        { type: "shortBreak", duration: 5, name: "Short Break" },
+        { type: "work", duration: 25, name: "Work" },
+        { type: "longBreak", duration: 15, name: "Long Break" }
+      ],
+      autoStartNext: false,
+      enableQuickBreak: true,
+      quickBreakDuration: 3,
+      quickBreakSound: "ding"
+    };
+    const created = await this.plugin.addSchedule(newSchedule);
+    await this.plugin.switchSchedule(created.id);
+    new import_obsidian2.Notice(`Schedule "${name}" created successfully`);
+  }
+  async editSchedule(scheduleId) {
+    const schedule = this.plugin.getSchedule(scheduleId);
+    if (!schedule) return;
+    const modal = new ScheduleEditModal(this.app, schedule, async (updatedSchedule) => {
+      await this.plugin.updateSchedule(updatedSchedule.id, updatedSchedule);
+      new import_obsidian2.Notice(`Schedule "${updatedSchedule.name}" updated successfully`);
+    });
+    modal.open();
+  }
+  async showConfirmDialog(message) {
+    return new Promise((resolve) => {
+      const modal = new ConfirmModal(this.app, message, () => {
+        resolve(true);
+      }, () => {
+        resolve(false);
+      });
+      modal.open();
+    });
+  }
+  openProgressColumnConfig() {
+    const modal = new ProgressColumnConfigModal(this.app, this.plugin);
+    modal.open();
+  }
+};
+var ScheduleNameModal = class extends import_obsidian2.Modal {
+  constructor(app, onSubmit, onCancel) {
+    super(app);
+    this.resolve = onSubmit;
+    this.reject = onCancel;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "New Schedule Name" });
+    const inputContainer = contentEl.createDiv();
+    this.inputEl = inputContainer.createEl("input", {
+      type: "text",
+      placeholder: "Enter schedule name..."
+    });
+    this.inputEl.style.width = "100%";
+    this.inputEl.style.marginBottom = "1em";
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.gap = "10px";
+    buttonContainer.style.justifyContent = "flex-end";
+    const cancelButton = buttonContainer.createEl("button", { text: "Cancel" });
+    cancelButton.onclick = () => {
+      this.reject();
+      this.close();
+    };
+    const createButton = buttonContainer.createEl("button", { text: "Create" });
+    createButton.onclick = () => {
+      const name = this.inputEl.value.trim();
+      if (name) {
+        this.resolve(name);
+        this.close();
+      } else {
+        new import_obsidian2.Notice("Please enter a schedule name");
+      }
+    };
+    this.inputEl.focus();
+    this.inputEl.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        createButton.click();
+      }
+    });
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
+var ScheduleEditModal = class extends import_obsidian2.Modal {
+  constructor(app, schedule, onSubmit) {
+    super(app);
+    this.schedule = { ...schedule };
+    this.resolve = onSubmit;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: `Edit Schedule: ${this.schedule.name}` });
+    new import_obsidian2.Setting(contentEl).setName("Schedule Name").addText(
+      (text) => text.setPlaceholder("Schedule name").setValue(this.schedule.name).onChange(async (value) => {
+        this.schedule.name = value;
+      })
+    );
+    new import_obsidian2.Setting(contentEl).setName("Schedule Type").setDesc("Choose between legacy simple schedule or custom phase sequence").addDropdown((dropdown) => {
+      dropdown.addOption("legacy", "Legacy (Work/Short/Long)").addOption("custom", "Custom Phases");
+      const isCustom = this.schedule.phases && this.schedule.phases.length > 0;
+      dropdown.setValue(isCustom ? "custom" : "legacy");
+      dropdown.onChange(async (value) => {
+        if (value === "custom") {
+          if (!this.schedule.phases || this.schedule.phases.length === 0) {
+            this.schedule.phases = [
+              { type: "work", duration: this.schedule.workDuration || 25, name: "Work" },
+              { type: "shortBreak", duration: this.schedule.shortBreakDuration || 5, name: "Short Break" },
+              { type: "work", duration: this.schedule.workDuration || 25, name: "Work" },
+              { type: "shortBreak", duration: this.schedule.shortBreakDuration || 5, name: "Short Break" },
+              { type: "work", duration: this.schedule.workDuration || 25, name: "Work" },
+              { type: "shortBreak", duration: this.schedule.shortBreakDuration || 5, name: "Short Break" },
+              { type: "work", duration: this.schedule.workDuration || 25, name: "Work" },
+              { type: "longBreak", duration: this.schedule.longBreakDuration || 15, name: "Long Break" }
+            ];
+          }
+        } else {
+          this.schedule.phases = void 0;
+        }
+        this.renderPhasesSection();
+      });
+    });
+    const legacyContainer = contentEl.createDiv();
+    legacyContainer.id = "legacy-settings";
+    new import_obsidian2.Setting(legacyContainer).setName("Work Duration (minutes)").addSlider(
+      (slider) => slider.setLimits(1, 60, 1).setValue(this.schedule.workDuration || 25).onChange(async (value) => {
+        this.schedule.workDuration = value;
+      })
+    );
+    new import_obsidian2.Setting(legacyContainer).setName("Short Break Duration (minutes)").addSlider(
+      (slider) => slider.setLimits(1, 30, 1).setValue(this.schedule.shortBreakDuration || 5).onChange(async (value) => {
+        this.schedule.shortBreakDuration = value;
+      })
+    );
+    new import_obsidian2.Setting(legacyContainer).setName("Long Break Duration (minutes)").addSlider(
+      (slider) => slider.setLimits(1, 60, 1).setValue(this.schedule.longBreakDuration || 15).onChange(async (value) => {
+        this.schedule.longBreakDuration = value;
+      })
+    );
+    this.phasesContainer = contentEl.createDiv();
+    this.phasesContainer.id = "custom-phases";
+    new import_obsidian2.Setting(contentEl).setName("Auto-start Next Session").setDesc("Automatically start the next session after completion").addToggle(
+      (toggle) => toggle.setValue(this.schedule.autoStartNext).onChange(async (value) => {
+        this.schedule.autoStartNext = value;
+      })
+    );
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.gap = "10px";
+    buttonContainer.style.justifyContent = "flex-end";
+    buttonContainer.style.marginTop = "1em";
+    const cancelButton = buttonContainer.createEl("button", { text: "Cancel" });
+    cancelButton.onclick = () => {
+      this.close();
+    };
+    const saveButton = buttonContainer.createEl("button", { text: "Save" });
+    saveButton.onclick = () => {
+      if (!this.schedule.name.trim()) {
+        new import_obsidian2.Notice("Schedule name cannot be empty");
+        return;
+      }
+      this.resolve(this.schedule);
+      this.close();
+    };
+    this.renderPhasesSection();
+  }
+  renderPhasesSection() {
+    this.phasesContainer.empty();
+    const isCustom = this.schedule.phases && this.schedule.phases.length > 0;
+    const legacyEl = document.getElementById("legacy-settings");
+    const phasesEl = this.phasesContainer;
+    if (legacyEl) {
+      legacyEl.style.display = isCustom ? "none" : "block";
+    }
+    phasesEl.style.display = isCustom ? "block" : "none";
+    if (isCustom) {
+      phasesEl.createEl("h3", { text: "Custom Phases" });
+      const phasesList = phasesEl.createDiv();
+      phasesList.style.marginBottom = "1em";
+      this.schedule.phases.forEach((phase, index) => {
+        const phaseContainer = phasesList.createDiv();
+        phaseContainer.style.display = "flex";
+        phaseContainer.style.alignItems = "center";
+        phaseContainer.style.gap = "10px";
+        phaseContainer.style.marginBottom = "5px";
+        phaseContainer.createSpan({ text: `${index + 1}.` });
+        const typeDropdown = phaseContainer.createEl("select");
+        ["work", "shortBreak", "longBreak"].forEach((type) => {
+          const option = typeDropdown.createEl("option", {
+            text: type === "work" ? "Work" : type === "shortBreak" ? "Short Break" : "Long Break",
+            value: type
+          });
+          if (phase.type === type) {
+            option.selected = true;
+          }
+        });
+        typeDropdown.onchange = () => {
+          phase.type = typeDropdown.value;
+        };
+        const durationInput = phaseContainer.createEl("input", { type: "number" });
+        durationInput.value = phase.duration.toString();
+        durationInput.min = "1";
+        durationInput.max = "120";
+        durationInput.style.width = "60px";
+        durationInput.onchange = () => {
+          phase.duration = parseInt(durationInput.value) || 25;
+        };
+        phaseContainer.createSpan({ text: "min" });
+        const nameInput = phaseContainer.createEl("input", { type: "text" });
+        nameInput.value = phase.name || "";
+        nameInput.placeholder = "Custom name (optional)";
+        nameInput.style.flex = "1";
+        nameInput.onchange = () => {
+          phase.name = nameInput.value || void 0;
+        };
+        if (this.schedule.phases.length > 1) {
+          const removeButton = phaseContainer.createEl("button", { text: "\xD7" });
+          removeButton.style.color = "red";
+          removeButton.style.padding = "0 5px";
+          removeButton.onclick = () => {
+            this.schedule.phases.splice(index, 1);
+            this.renderPhasesSection();
+          };
+        }
+      });
+      const addButton = phasesList.createEl("button", { text: "Add Phase" });
+      addButton.onclick = () => {
+        this.schedule.phases.push({
+          type: "work",
+          duration: 25,
+          name: "Work"
+        });
+        this.renderPhasesSection();
+      };
+    }
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
+var ConfirmModal = class extends import_obsidian2.Modal {
+  constructor(app, message, onConfirm, onCancel) {
+    super(app);
+    this.message = message;
+    this.resolve = (confirmed) => {
+      if (confirmed) {
+        onConfirm();
+      } else {
+        onCancel();
+      }
+    };
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Confirm" });
+    contentEl.createEl("p", { text: this.message });
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.gap = "10px";
+    buttonContainer.style.justifyContent = "flex-end";
+    buttonContainer.style.marginTop = "1em";
+    const cancelButton = buttonContainer.createEl("button", { text: "Cancel" });
+    cancelButton.onclick = () => {
+      this.resolve(false);
+      this.close();
+    };
+    const confirmButton = buttonContainer.createEl("button", { text: "Confirm" });
+    confirmButton.style.color = "red";
+    confirmButton.onclick = () => {
+      this.resolve(true);
+      this.close();
+    };
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
+var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Progress Column Configuration" });
+    contentEl.createEl("p", {
+      text: 'Configure which column to use as the "In Progress" column for each kanban board. This helps when boards have multiple progress-like columns.'
+    });
+    const container = contentEl.createDiv("progress-column-config");
+    const kanbanFiles = Object.keys(this.plugin.settings.perBoardProgressColumns || {});
+    if (kanbanFiles.length === 0) {
+      const emptyState = container.createDiv("empty-state");
+      emptyState.createEl("p", { text: "No kanban boards configured yet. Use kanban boards first to set up progress column preferences." });
+    } else {
+      kanbanFiles.forEach((boardPath) => {
+        const boardSetting = new import_obsidian2.Setting(container).setName(boardPath).setDesc("Progress column for this board").addText(
+          (text) => text.setPlaceholder("In Progress").setValue(this.plugin.settings.perBoardProgressColumns[boardPath] || "").onChange(async (value) => {
+            this.plugin.settings.perBoardProgressColumns[boardPath] = value;
+            await this.plugin.saveSettings();
+          })
+        );
+        boardSetting.addButton(
+          (button) => button.setButtonText("Remove").setWarning().onClick(async () => {
+            delete this.plugin.settings.perBoardProgressColumns[boardPath];
+            await this.plugin.saveSettings();
+            this.onOpen();
+          })
+        );
+      });
+    }
+    const instructions = contentEl.createDiv("instructions");
+    instructions.createEl("h3", { text: "How to use:" });
+    instructions.createEl("ol", {}, (ol) => {
+      ol.createEl("li", { text: "Use kanban boards with multiple progress columns" });
+      ol.createEl("li", { text: "When prompted, select your preferred progress column" });
+      ol.createEl("li", { text: "Or configure manually here" });
+      ol.createEl("li", { text: "The plugin will remember your choice for each board" });
+    });
+    const buttonContainer = contentEl.createDiv("modal-button-container");
+    buttonContainer.style.marginTop = "20px";
+    buttonContainer.style.textAlign = "right";
+    const closeButton = buttonContainer.createEl("button", { text: "Close" });
+    closeButton.onclick = () => this.close();
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
   }
 };

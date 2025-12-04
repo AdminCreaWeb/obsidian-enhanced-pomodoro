@@ -1,6 +1,152 @@
 # Enhanced Pomodoro Timer - Development Status
 
-## 🎯 Latest Update (Nov 19, 2025 - Session 11 Continued)
+## 🎯 Latest Update (Dec 4, 2025 - Kanban & UI Refactoring)
+**Major Fixes and Improvements:**
+
+### ✅ **Daily Kanban File Creation - Fixed**
+- **Proper Kanban Format**: Files now use `kanban-plugin: board` (not `basic`)
+- **Settings Block**: Added required `%% kanban:settings %%` block at end
+- **Emoji Column Headers**: Uses `📋 To Do`, `🚧 In Progress`, `✅ Done`
+- **YYYYMMDD Naming**: Files created as `20251204_daily_notes_kanban.md`
+- **Auto-Load After Creation**: New file immediately loads in dropdown and displays
+- **Settings Path Support**: Uses `calendarFilesPath` setting for folder location
+
+### ✅ **Task Auto-Move System - Fixed**
+- **Check → Done**: Tasks now auto-move to Done column when checked
+- **Uncheck → Original Column**: Tasks return to their ORIGINAL column (not always "In Progress")
+- **Column Tracking**: New `taskOriginalColumns` Map stores source column before move
+- **Scroll After Move**: Auto-scrolls to target column after task movement
+- **Task Re-selection**: Automatically re-selects moved task in new location
+
+### ✅ **Empty Column Display - New**
+- **Show All Columns**: Empty columns now display (previously hidden)
+- **Original Order**: Columns maintain order from Kanban file
+- **Empty State**: Shows "No tasks" placeholder in empty columns
+- **Drag & Drop Ready**: Empty columns accept dropped tasks
+
+### ✅ **Task Insertion Position - Fixed**
+- **Insert at TOP**: Tasks now insert at top of target column (not bottom)
+- **Consistent Behavior**: Both check/uncheck moves place task at column top
+
+### 🔄 **In Progress**
+- **Mini Calendar View**: Calendar widget for date selection (TaskNotes-style)
+- **Calendar Tasks View**: Daily task list view (TaskNotes-style)
+- **Agenda File Generation**: Auto-generate weekly/monthly agenda files
+- **Right-Click Context Menus**: Task actions via context menu (planned)
+
+### 📋 **Quick Git Summary (Dec 4, 2025)**
+```bash
+# Kanban & UI Refactoring (Dec 4, 2025)
+fix: Daily kanban file format now compatible with Kanban plugin
+- Changed from 'basic' to 'board' format
+- Added kanban:settings block
+- Uses emoji column headers (📋, 🚧, ✅)
+- YYYYMMDD filename format
+
+feat: Task auto-move improvements
+- Check moves task to Done column
+- Uncheck returns task to ORIGINAL column (not always In Progress)
+- Track original column per task in Map
+- Auto-scroll and re-select after move
+
+feat: Empty column display
+- Show all columns including empty ones
+- Preserve original column order from file
+- Empty state placeholder for columns without tasks
+
+fix: Task insertion at TOP of column
+- Tasks now insert at top instead of bottom
+- Consistent for both check and uncheck operations
+```
+
+---
+
+## 🎯 Previous Update (Nov 27, 2025 - Major Sidebar Refactoring)
+**Major UI/UX Overhaul - 3-Tab Sidebar Structure:**
+
+### ✅ **New 3-Tab Layout System**
+- **📅 Mini Calendar Tab**: Pure calendar view for date selection
+- **📋 Calendar Tasks Tab**: Daily kanban-style task management from calendar notes
+- **📝 Manual Kanban Tab**: Traditional kanban board file selection and management
+- **Dynamic Tab Switching**: Proper active states and content visibility
+- **Settings Integration**: Choose default tab in plugin settings
+
+### ✅ **Button System Refactoring** 
+- **Fixed Play Button Text**: Now shows text like other buttons (Play/Pause)
+- **Consistent Button Structure**: All buttons use new `createControlButton()` helper method
+- **Dynamic Text Updates**: Play/Pause button properly updates text when state changes
+- **Button Style Toggle Support**: Foundation for icons/text/icons+text modes
+
+### ✅ **Task Context Display System**
+- **Dynamic Context Label**: Shows current task source between timer and buttons
+- **Context-Aware Text**: 
+  - Mini Calendar: Shows current date
+  - Calendar Tasks: Shows "Today" or specific date
+  - Manual Kanban: Shows kanban filename
+- **Real-Time Updates**: Updates when switching views or changing kanban files
+
+### ✅ **Auto-Scroll Improvements**
+- **Enhanced Scroll Logic**: Better timing and fallback mechanisms
+- **Smooth Scrolling**: Uses `scrollTo()` with smooth behavior
+- **Boundary Protection**: Prevents scrolling beyond container limits
+- **DOM Readiness**: Waits for content to render before scrolling
+
+### 🔄 **Daily Kanban File System**
+- **Automatic File Creation**: Creates daily kanban files when accessing Calendar Tasks
+- **Structured Format**: Uses proper kanban frontmatter and column structure
+- **File Organization**: Creates files in `Daily Notes/` folder
+- **Date-Based Naming**: Format: "November 27, 2025.md"
+
+### ⚠️ **Known Issue - Empty File Generation**
+Currently creates daily kanban files even when no tasks exist. This can generate many empty files over time. **Solution needed**: Only create files when tasks are actually added.
+
+## 🔄 **In Progress / Partially Complete**
+### 🚧 **Button Style Toggle System**
+- **Status**: Foundation implemented, needs completion
+- **Missing**: Responsive layout (icons only when sidebar < 575px)
+- **Missing**: Tooltip fixes for all buttons in icons-only mode
+
+### 🚧 **Calendar File Management**
+- **Status**: Basic daily file creation implemented
+- **Missing**: Open file button next to kanban dropdown
+- **Missing**: Calendar file selection in settings instead of second dropdown
+- **Issue**: Empty file generation needs optimization
+
+### 🚧 **Advanced Features**
+- **Status**: Not yet implemented
+- **Schedule Summary Generation**: Auto-generate from `Pomodoro Task Timers.md`
+- **Per-Board Progress Column Selection**: Store preferences per kanban board
+- **Responsive Design**: Sidebar width-based button layout changes
+
+## 📋 **Quick Git Summary (Latest Changes)**
+```bash
+# Major Sidebar Refactoring (Nov 27, 2025)
+feat: Implement 3-tab sidebar structure
+- Add Mini Calendar, Calendar Tasks, Manual Kanban tabs
+- Dynamic tab switching with proper active states
+- Task context display between timer and buttons
+- Auto-scroll improvements with smooth behavior
+- Button system refactoring with createControlButton helper
+- Daily kanban file creation for Calendar Tasks view
+- Settings integration for default tab selection
+
+fix: Resolve Play button text display issues
+- Update all buttons to use consistent structure
+- Dynamic text updates for Play/Pause state changes
+- Foundation for button style toggle functionality
+
+fix: Auto-scroll enhancement for task movement
+- Improved timing and DOM readiness checks
+- Smooth scrolling with boundary protection
+- Better fallback mechanisms for compatibility
+
+refactor: Task context display system
+- Real-time updates when switching views
+- Context-aware text based on current tab
+- Integration with kanban file changes
+```
+
+## 🎯 Previous Update (Nov 19, 2025 - Session 11 Continued)
 **Critical Bug Fixes - Round 8:**
 - ✅ **Completion State Persistence** - Checkbox state immediately synced back to Kanban file
 - ✅ **Unchecked Task Recovery** - Restored ability to reuse tasks without blocking other selections

@@ -21,16 +21,24 @@
   "autoStartNext": true,
   "debugMode": false,
   "logFile": "Pomodoro Log.md",
-  "kanbanBoardPath": "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md",
-  "currentTask": "task-Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md-130",
+  "kanbanBoardPath": "Daily Notes/20251204_daily_notes_kanban.md",
+  "currentTask": "task-Docs/Obsidian_Kanban_And_Implementation_Plan/_Quick_Task_Board.md-14",
   "enableQuickBreak": true,
   "quickBreakDuration": 5,
   "quickBreakSound": "default",
-  "sessionsCompletedCount": 0,
+  "sessionsCompletedCount": 3,
   "autoMoveToProgress": true,
   "autoMoveToDone": true,
-  "restrictToProgressTasks": false,
   "updateTaskTimerInFile": true,
+  "showButtonTooltips": true,
+  "buttonStyle": "icons+text",
+  "responsiveButtons": true,
+  "sidebarView": "mini-calendar",
+  "calendarFilesPath": "Daily Notes",
+  "autoCreateCalendarFiles": false,
+  "enableScheduleSummary": true,
+  "scheduleSummaryPath": "Pomodoro Schedule Summary.md",
+  "perBoardProgressColumns": {},
   "kanbanFileCache": {
     "pomodoro-debug-log.md": false,
     "Untitled.md": false,
@@ -100,6 +108,7 @@
     "2025-10-17.md": false,
     "Docs/Obsidian_Kanban_And_Implementation_Plan/_Performance_Test_Kanban.md": true,
     "Pomodoro Task Timers.md": false,
-    "Spline integration.md": false
+    "Spline integration.md": false,
+    "Untitled 1.md": false
   }
 }
