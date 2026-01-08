@@ -1,6 +1,78 @@
 # Enhanced Pomodoro Timer - Development Status
 
-## 🎯 Latest Update (Dec 4, 2025 - Kanban & UI Refactoring)
+## 🎯 Latest Update (Dec 15, 2025 - Major UX Improvements)
+**New Features & UI Enhancements:**
+
+### ✅ **Right-Click Context Menus - NEW**
+- **Task Actions**: Right-click any task for context menu
+- **Start Timer**: Quick start timer on task
+- **Move to Column**: Submenu to move task to any column
+- **Toggle Completion**: Mark complete/incomplete
+- **Open Kanban File**: Quick access to source file
+
+### ✅ **Active Task Display - NEW (User Request)**
+- **TaskNotes-style**: Shows current task name directly under timer
+- **Visual Indicator**: 🎯 icon with task name
+- **Truncation**: Long names truncated with "..."
+- **Dynamic Updates**: Updates when switching tasks
+
+### ✅ **Quick Scroll Buttons - NEW (User Request)**
+- **Column Navigation**: 3 buttons above task list (Todo/Progress/Done)
+- **Dynamic Buttons**: Auto-generated from actual column names
+- **Smooth Scroll**: Scrolls to column with highlight effect
+- **Smart Icons**: 📋 Todo, 🚧 Progress, ✅ Done
+
+### ✅ **Quick Add Task - NEW**
+- **Inline Input**: Text field at top of each column (except Done)
+- **Press Enter**: Instantly adds task to Kanban file
+- **Auto-Reload**: Task list refreshes after adding
+- **Clean UI**: Minimal input that blends with design
+
+### ✅ **Keyboard Navigation - NEW**
+- **Arrow Keys**: ↑/↓ or j/k (Vim-style) to navigate tasks
+- **Enter**: Start timer on selected task
+- **Space**: Toggle task completion
+- **M Key**: Move task to next column (Todo→Progress→Done)
+- **Focus Tracking**: Visual focus indicator on selected task
+
+### ✅ **Task Priority Indicators - NEW**
+- **Auto-Detection**: Detects priority from task text
+- **Visual Styling**: Color-coded left border + subtle background
+  - 🔴 **High**: Red border (!!!, #high, p1, urgent, critical)
+  - 🟡 **Medium**: Orange border (!!, #medium, p2)
+  - 🟢 **Low**: Green border (!, #low, p3)
+- **Smart Keywords**: Recognizes "urgent", "critical", "asap", "blocker"
+
+### 📋 **Quick Git Summary (Dec 15, 2025)**
+```bash
+# Major UX Improvements (Dec 15, 2025)
+feat: Right-click context menus for tasks
+- Start timer, move to column, toggle complete, open file
+
+feat: Active task display under timer (TaskNotes-style)
+- Shows current task with 🎯 icon
+- Truncates long names, updates dynamically
+
+feat: Quick scroll buttons for column navigation
+- Auto-generated from column names
+- Smooth scroll with highlight effect
+
+feat: Quick add task inline input
+- Press Enter to add task to any column
+- Auto-reloads task list after adding
+
+feat: Keyboard navigation for power users
+- Arrow keys, Enter, Space, M for navigation
+- Vim-style j/k support
+
+feat: Task priority indicators
+- Auto-detect from !!!, #high, p1, urgent keywords
+- Color-coded borders (red/orange/green)
+```
+
+---
+
+## 🎯 Previous Update (Dec 4, 2025 - Kanban & UI Refactoring)
 **Major Fixes and Improvements:**
 
 ### ✅ **Daily Kanban File Creation - Fixed**

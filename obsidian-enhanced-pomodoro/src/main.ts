@@ -124,6 +124,12 @@ interface EnhancedPomodoroSettings {
   scheduleSummaryPath: string;
   // Per-board progress column settings
   perBoardProgressColumns: Record<string, string>; // boardPath -> columnTitle
+  // Per-board column ordering (draggable chips)
+  perBoardColumnOrder: Record<string, string[]>; // boardPath -> ordered column names
+  // Per-board main column mappings (which column serves as Todo/Progress/Done)
+  perBoardMainColumns: Record<string, {todo: string, progress: string, done: string}>; // boardPath -> main column mappings
+  // Per-board custom schedule
+  perBoardSchedule: Record<string, {name: string, phases: Array<{type: string, duration: number}>, currentPhaseIndex?: number}>; // boardPath -> custom schedule
   // Task timer settings
   updateTaskTimerInFile: boolean;
   // Auto-move settings
@@ -131,6 +137,10 @@ interface EnhancedPomodoroSettings {
   autoMoveToDone: boolean;
   // Sessions tracking
   sessionsCompletedCount: number;
+  // Daily note sync settings
+  includeWorkTimeInSync: boolean; // Add work time calculations when syncing to daily note
+  // Sound settings
+  muteSounds: boolean; // Mute all sounds
 }
 
 const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
@@ -176,6 +186,11 @@ const DEFAULT_SETTINGS: EnhancedPomodoroSettings = {
   enableScheduleSummary: true, // Enable schedule summary generation
   scheduleSummaryPath: 'Pomodoro Schedule Summary.md',
   perBoardProgressColumns: {}, // Empty object initially
+  perBoardColumnOrder: {}, // Empty object initially - stores custom column ordering per board
+  perBoardMainColumns: {}, // Empty object initially - stores main column mappings per board
+  perBoardSchedule: {}, // Empty object initially - stores custom schedules per board
+  includeWorkTimeInSync: true, // Include work time calculations when syncing to daily note
+  muteSounds: false, // Sounds ON by default
 };
 
 export default class EnhancedPomodoro extends Plugin {
@@ -186,6 +201,10 @@ export default class EnhancedPomodoro extends Plugin {
   isRunning: boolean = false;
   currentMode: 'work' | 'shortBreak' | 'longBreak' = 'work';
   sessionsCompleted: number = 0;
+
+  // Auto-logging: track last auto-log time to log every 5 minutes during work
+  private lastAutoLogTime: number = 0;
+  private readonly AUTO_LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
   // Quick break state restoration
   private quickBreakSavedState: {
@@ -200,6 +219,9 @@ export default class EnhancedPomodoro extends Plugin {
   public kanbanFileCache: { [path: string]: boolean } = {};
   public lastScanTime: number = 0;
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+  
+  // Reference to settings tab for refresh
+  public settingTab: EnhancedPomodoroSettingTab | null = null;
 
   private async saveKanbanCache(): Promise<void> {
     await this.saveData({ kanbanFileCache: this.kanbanFileCache });
@@ -350,6 +372,25 @@ export default class EnhancedPomodoro extends Plugin {
         this.removeKanbanIntegration();
         await this.setupKanbanIntegration();
       }
+      
+      // Sync sidebar dropdown and reload tasks
+      const timerView = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view as any;
+      if (timerView) {
+        if (timerView.kanbanSelector) {
+          timerView.kanbanSelector.value = selectedPath;
+        }
+        if (timerView.loadKanbanTasks) {
+          await timerView.loadKanbanTasks(selectedPath);
+        }
+        if (timerView.updateScheduleDisplay) {
+          timerView.updateScheduleDisplay();
+        }
+      }
+      
+      // Refresh settings tab to show board config section
+      if (this.settingTab) {
+        this.settingTab.display();
+      }
     });
   }
 
@@ -421,7 +462,8 @@ export default class EnhancedPomodoro extends Plugin {
       });
 
       // Set up settings tab
-      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
+      this.settingTab = new EnhancedPomodoroSettingTab(this.app, this);
+      this.addSettingTab(this.settingTab);
       
       // Initialize Kanban integration if enabled
       if (this.settings.kanbanIntegration) {
@@ -498,9 +540,48 @@ export default class EnhancedPomodoro extends Plugin {
 
   
   /**
-   * Gets the current active schedule
+   * Gets the current active schedule (checks board-specific schedule first)
    */
   getCurrentSchedule(): TimeSchedule {
+    // Check for board-specific custom schedule first
+    const boardPath = this.settings.kanbanBoardPath;
+    const boardSchedule = this.settings.perBoardSchedule?.[boardPath];
+    
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      // Convert board schedule to TimeSchedule format
+      const workPhase = boardSchedule.phases.find(p => p.type === 'Work');
+      const shortBreakPhase = boardSchedule.phases.find(p => p.type === 'Short Break');
+      const longBreakPhase = boardSchedule.phases.find(p => p.type === 'Long Break');
+      
+      // Convert phase types to internal format
+      const convertPhaseType = (type: string): 'work' | 'shortBreak' | 'longBreak' => {
+        if (type === 'Work') return 'work';
+        if (type === 'Short Break') return 'shortBreak';
+        return 'longBreak';
+      };
+      
+      // Get stored phase index from board schedule
+      const storedPhaseIndex = boardSchedule.currentPhaseIndex || 0;
+      
+      return {
+        id: `board-${boardPath}`,
+        name: boardSchedule.name || 'Board Custom',
+        workDuration: workPhase?.duration || 25,
+        shortBreakDuration: shortBreakPhase?.duration || 5,
+        longBreakDuration: longBreakPhase?.duration || 15,
+        autoStartNext: true,
+        enableQuickBreak: this.settings.enableQuickBreak,
+        quickBreakDuration: this.settings.quickBreakDuration,
+        quickBreakSound: this.settings.quickBreakSound,
+        phases: boardSchedule.phases.map(p => ({
+          type: convertPhaseType(p.type),
+          duration: p.duration
+        })),
+        currentPhaseIndex: storedPhaseIndex
+      };
+    }
+    
+    // Fallback to global schedule
     const schedule = this.settings.schedules.find(s => s.id === this.settings.currentScheduleId);
     if (!schedule) {
       // Fallback to default schedule if current schedule is not found
@@ -573,14 +654,22 @@ export default class EnhancedPomodoro extends Plugin {
     let currentIndex = schedule.currentPhaseIndex || 0;
     currentIndex = (currentIndex + 1) % schedule.phases.length;
     
-    // Update the schedule with new phase index
-    const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
-    if (scheduleIndex !== -1) {
-      this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+    // Check if this is a board-specific schedule
+    const boardPath = this.settings.kanbanBoardPath;
+    if (schedule.id.startsWith('board-') && boardPath && this.settings.perBoardSchedule?.[boardPath]) {
+      // Store phase index in board schedule
+      this.settings.perBoardSchedule[boardPath].currentPhaseIndex = currentIndex;
       this.saveSettings();
+      console.log('[Schedule] Advanced board schedule to phase', currentIndex, 'of', schedule.phases.length);
+    } else {
+      // Update the schedule in the schedules array
+      const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
+      if (scheduleIndex !== -1) {
+        this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+        this.saveSettings();
+      }
+      console.log('[Schedule] Advanced to phase', currentIndex, 'of', schedule.phases.length);
     }
-    
-    console.log('[Schedule] Advanced to phase', currentIndex, 'of', schedule.phases.length);
   }
   
   /**
@@ -680,8 +769,24 @@ export default class EnhancedPomodoro extends Plugin {
     if (this.isRunning) return;
     
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = (schedule.workDuration || 25) * 60;
-    this.currentMode = 'work';
+    
+    // Use first phase of custom schedule if available
+    if (schedule.phases && schedule.phases.length > 0) {
+      const currentPhase = this.getCurrentPhase();
+      if (currentPhase) {
+        this.currentMode = currentPhase.type as 'work' | 'shortBreak' | 'longBreak';
+        this.timeRemaining = currentPhase.duration * 60;
+        console.log('[Start] Using custom schedule phase:', currentPhase.type, '(', currentPhase.duration, 'min)');
+      } else {
+        this.currentMode = 'work';
+        this.timeRemaining = (schedule.workDuration || 25) * 60;
+      }
+    } else {
+      // Legacy schedule - default to work
+      this.currentMode = 'work';
+      this.timeRemaining = (schedule.workDuration || 25) * 60;
+    }
+    
     this.isRunning = true;
     this.startTimer();
     await this.logSession('start');
@@ -793,11 +898,17 @@ export default class EnhancedPomodoro extends Plugin {
     }
     
     // Otherwise, complete the current session and move to next phase
-    console.log('[End Cycle] Ending current session phase');
-    await this.completeSession();
+    console.log('[End Cycle] Ending current session phase (manual trigger)');
+    await this.completeSession(true); // Manual trigger bypasses debounce
   }
   
   playSound(sound: string) {
+    // Check if sounds are muted
+    if (this.settings.muteSounds) {
+      console.log('[Sound] Muted - skipping:', sound);
+      return;
+    }
+    
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       
@@ -899,6 +1010,11 @@ export default class EnhancedPomodoro extends Plugin {
   startTimer() {
     if (this.timerInterval) clearInterval(this.timerInterval);
     
+    // Reset auto-log timer when starting a new work session
+    if (this.currentMode === 'work') {
+      this.lastAutoLogTime = Date.now();
+    }
+    
     this.timerInterval = window.setInterval(() => {
       if (!this.isRunning) return;
       
@@ -909,6 +1025,17 @@ export default class EnhancedPomodoro extends Plugin {
       const view = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
       if (view && 'updateActiveTaskTimer' in view && this.currentMode === 'work') {
         (view as any).updateActiveTaskTimer();
+      }
+      
+      // Auto-log work progress every 5 minutes during work mode
+      if (this.currentMode === 'work') {
+        const now = Date.now();
+        if (now - this.lastAutoLogTime >= this.AUTO_LOG_INTERVAL_MS) {
+          this.lastAutoLogTime = now;
+          this.logSession('auto_progress').catch(err => 
+            console.error('[AUTO LOG] Error:', err)
+          );
+        }
       }
       
       // Check if timer has reached zero
@@ -956,20 +1083,31 @@ export default class EnhancedPomodoro extends Plugin {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
     }
-    // Reset to work mode
-    this.currentMode = 'work';
     
     // Reset custom sequence phase index
     const schedule = this.getCurrentSchedule();
     if (schedule.phases && schedule.phases.length > 0) {
-      const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
-      if (scheduleIndex !== -1) {
-        this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
-        this.saveSettings();
+      // Reset phase index to 0 for board schedules
+      const boardPath = this.settings.kanbanBoardPath;
+      if (schedule.id.startsWith('board-') && boardPath && this.settings.perBoardSchedule?.[boardPath]) {
+        this.settings.perBoardSchedule[boardPath].currentPhaseIndex = 0;
+      } else {
+        const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
+        if (scheduleIndex !== -1) {
+          this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
+        }
       }
+      
+      // Set mode and duration from first phase of custom schedule
+      const firstPhase = schedule.phases[0];
+      this.currentMode = firstPhase.type as 'work' | 'shortBreak' | 'longBreak';
+      this.timeRemaining = firstPhase.duration * 60;
+      console.log('[Reset] Starting with first phase of custom schedule:', firstPhase.type, '(', firstPhase.duration, 'min)');
+    } else {
+      // Legacy schedule - default to work mode
+      this.currentMode = 'work';
+      this.timeRemaining = this.getDurationForPhase('work') * 60;
     }
-    
-    this.timeRemaining = this.getDurationForPhase('work') * 60;
     
     // Also reset sessions count on manual reset
     this.sessionsCompleted = 0;
@@ -988,7 +1126,18 @@ export default class EnhancedPomodoro extends Plugin {
     await this.logSession('reset');
   }
   
-  async completeSession() {
+  // Debounce for completeSession to prevent duplicate completions
+  private lastSessionCompleteTime = 0;
+  
+  async completeSession(isManualTrigger: boolean = false) {
+  // Debounce: Prevent duplicate completions within 5 seconds (skip for manual triggers)
+  const now = Date.now();
+  if (!isManualTrigger && now - this.lastSessionCompleteTime < 5000) {
+    console.log('[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)');
+    return;
+  }
+  this.lastSessionCompleteTime = now;
+  
   this.isRunning = false;
   if (this.timerInterval) {
     clearInterval(this.timerInterval);
@@ -1037,6 +1186,21 @@ export default class EnhancedPomodoro extends Plugin {
         nextMode = nextPhase.type;
         nextDuration = nextPhase.duration;
         console.log('  → Custom Sequence Next Phase:', nextPhase.name || nextPhase.type);
+      } else if (nextPhase && nextPhase.type === 'work') {
+        // Work→Work transition (schedule wrap-around) - start next work session
+        console.log('  → Custom Sequence: Work→Work wrap-around, starting new cycle');
+        this.currentMode = 'work';
+        this.timeRemaining = nextPhase.duration * 60;
+        new Notice('Starting new work cycle!');
+        this.playSound('ding');
+        this.updateStatusBar();
+        if (schedule.autoStartNext === true) {
+          console.log('  → Auto-start: YES - Starting work timer immediately');
+          this.isRunning = true;
+          this.startTimer();
+        }
+        console.log('═══════════════════════════════════════════════════════');
+        return; // Exit early - we're starting work, not a break
       } else {
         // Fallback to legacy logic if custom sequence is malformed
         const isLongBreak = this.sessionsCompleted % 4 === 0;
@@ -1086,28 +1250,39 @@ export default class EnhancedPomodoro extends Plugin {
       return; // Don't continue with normal break completion
     }
     
-    // Normal break completion - reset to work mode
-    console.log('  → Break Complete! Returning to work mode');
-    this.currentMode = 'work';
+    // Normal break completion - check what's next in custom sequence
+    console.log('  → Break Complete!');
     
-    // For custom sequences, advance to next phase
+    // For custom sequences, advance to next phase (could be work OR another break)
     if (schedule.phases && schedule.phases.length > 0) {
       this.advanceToNextPhase();
       const nextPhase = this.getCurrentPhase();
-      if (nextPhase && nextPhase.type === 'work') {
+      
+      if (nextPhase) {
+        this.currentMode = nextPhase.type as 'work' | 'shortBreak' | 'longBreak';
         this.timeRemaining = nextPhase.duration * 60;
-        console.log('  → Custom Sequence Next Phase:', nextPhase.name || 'Work');
+        console.log('  → Custom Sequence Next Phase:', nextPhase.type, '(', nextPhase.duration, 'min)');
+        
+        if (nextPhase.type === 'work') {
+          new Notice('Break is over! Time to work!');
+        } else {
+          // Next phase is another break (e.g., Short Break → Long Break)
+          const breakName = nextPhase.type === 'longBreak' ? 'Long Break' : 'Short Break';
+          new Notice(`Starting ${breakName}!`);
+        }
       } else {
-        // Fallback to default work duration
+        // Fallback to work mode
+        this.currentMode = 'work';
         this.timeRemaining = this.getDurationForPhase('work') * 60;
         console.log('  → Fallback to default work duration');
+        new Notice('Break is over! Time to work!');
       }
     } else {
-      // Legacy schedule
+      // Legacy schedule - always go back to work
+      this.currentMode = 'work';
       this.timeRemaining = this.getDurationForPhase('work') * 60;
+      new Notice('Break is over! Time to work!');
     }
-    
-    new Notice('Break is over! Time to work!');
     await this.logSession('break_complete');
     
     // Play work start sound (default bell)
@@ -1121,6 +1296,11 @@ export default class EnhancedPomodoro extends Plugin {
       console.log('  → Auto-start: YES - Starting work timer immediately');
       this.isRunning = true;
       this.startTimer();
+      // CRITICAL: Resume task timer to reset lastUpdateTime and prevent break time being added
+      const view = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
+      if (view && 'resumeTaskTimer' in view) {
+        (view as any).resumeTaskTimer();
+      }
     } else {
       console.log('  → Auto-start: NO - Waiting for manual start');
     }
@@ -1496,7 +1676,8 @@ export default class EnhancedPomodoro extends Plugin {
     }
 
     // Skip unnecessary logging events to keep log concise
-    const skipActions = ['resume', 'pause', 'plugin_unloaded', 'reset'];
+    // But DO log pause/stop if there's accumulated work time
+    const skipActions = ['resume', 'plugin_unloaded'];
     if (skipActions.includes(action)) {
       return; // Only log to Kanban, not to file
     }
@@ -1544,6 +1725,25 @@ export default class EnhancedPomodoro extends Plugin {
       } else if (action === 'break_complete') {
         logEntry = `\n🔄 BREAK COMPLETE - Back to work\n`;
         logEntry += `   📅 ${timestamp}\n\n`;
+      } else if (action === 'pause' || action === 'reset') {
+        // Only log pause/reset if there's accumulated work time (not 0:00)
+        if (taskTime && taskTime !== '0:00' && this.currentMode === 'work') {
+          const actionLabel = action === 'pause' ? '⏸️ WORK PAUSED' : '⏹️ WORK STOPPED';
+          logEntry = `\n${actionLabel}\n`;
+          logEntry += `   📅 ${timestamp}\n`;
+          logEntry += `   📋 Kanban: ${kanbanFile}\n`;
+          logEntry += `   ✓  Task: ${taskName}\n`;
+          logEntry += `   ⏱️  Task Time: ${taskTime}\n\n`;
+        }
+      } else if (action === 'auto_progress') {
+        // Auto-log every 5 minutes during work - only if there's accumulated time
+        if (taskTime && taskTime !== '0:00') {
+          logEntry = `\n📊 WORK PROGRESS (auto-save)\n`;
+          logEntry += `   📅 ${timestamp}\n`;
+          logEntry += `   📋 Kanban: ${kanbanFile}\n`;
+          logEntry += `   ✓  Task: ${taskName}\n`;
+          logEntry += `   ⏱️  Task Time: ${taskTime}\n\n`;
+        }
       }
 
       if (!logEntry) return; // Don't log unknown actions
@@ -1933,22 +2133,34 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         })
       );
 
-    // Per-Board Progress Column Settings
+    // Per-Board Column & Schedule Configuration
     new Setting(containerEl)
-      .setName('Per-Board Progress Columns')
+      .setName('Board Column & Schedule Configuration')
       .setHeading();
 
-    new Setting(containerEl)
-      .setName('Progress Column Selection')
-      .setDesc('Configure preferred progress columns for each kanban board')
-      .addButton(button => button
-        .setButtonText('Configure Progress Columns')
-        .setCta()
-        .onClick(() => {
-          // Open progress column configuration modal
-          this.openProgressColumnConfig();
-        })
-      );
+    // Show configuration for currently selected board
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    if (boardPath) {
+      const boardName = boardPath.split('/').pop()?.replace('.md', '') || boardPath;
+      containerEl.createEl('p', { 
+        text: `Configuring: ${boardName}`,
+        cls: 'setting-item-description'
+      });
+      
+      // Create container for board config
+      const boardConfigContainer = containerEl.createDiv('board-config-container');
+      boardConfigContainer.style.padding = '12px';
+      boardConfigContainer.style.background = 'var(--background-secondary)';
+      boardConfigContainer.style.borderRadius = '8px';
+      boardConfigContainer.style.marginBottom = '16px';
+      
+      this.renderBoardConfigInSettings(boardConfigContainer, boardPath);
+    } else {
+      containerEl.createEl('p', { 
+        text: 'Select a Kanban board in the sidebar to configure columns and schedule.',
+        cls: 'setting-item-description'
+      });
+    }
 
     new Setting(containerEl)
       .setName('Update timer in Kanban file')
@@ -1980,6 +2192,17 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.scheduleSummaryPath)
         .onChange(async (value) => {
           this.plugin.settings.scheduleSummaryPath = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Include work time in Daily Note sync')
+      .setDesc('When syncing Kanban tasks to Daily Note, include work time calculations per task and totals')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.includeWorkTimeInSync)
+        .onChange(async (value) => {
+          this.plugin.settings.includeWorkTimeInSync = value;
           await this.plugin.saveSettings();
         })
       );
@@ -2265,6 +2488,22 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
       );
       
     new Setting(containerEl)
+      .setName('Mute All Sounds')
+      .setDesc('Turn off all timer sounds')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.muteSounds)
+        .onChange(async (value) => {
+          this.plugin.settings.muteSounds = value;
+          await this.plugin.saveSettings();
+          // Update sidebar mute button if it exists
+          const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view as any;
+          if (view && view.updateMuteButton) {
+            view.updateMuteButton();
+          }
+        })
+      );
+      
+    new Setting(containerEl)
       .setName('Short Break Sound')
       .setDesc('Three quick beeps at 693Hz')
       .addButton(button => button
@@ -2356,6 +2595,474 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
   openProgressColumnConfig() {
     const modal = new ProgressColumnConfigModal(this.app, this.plugin);
     modal.open();
+  }
+
+  // Render board configuration directly in settings (no popup)
+  private renderBoardConfigInSettings(container: HTMLElement, boardPath: string) {
+    container.empty();
+    
+    // Main Column Mapping Section
+    container.createEl('h4', { text: '🎯 Main Column Mapping' });
+    container.createEl('p', { 
+      text: 'Define which columns serve as Todo/Progress/Done.',
+      cls: 'setting-item-description'
+    });
+    
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath] || { todo: '', progress: '', done: '' };
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const currentOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath] || [...defaultColumns];
+    const allColumns = ['', ...currentOrder, 'Backlog', 'Review', 'Blocked', 'Archive'].filter((v, i, a) => a.indexOf(v) === i);
+    
+    // Todo mapping
+    const todoSetting = new Setting(container)
+      .setName('📋 Todo Column')
+      .addDropdown(dropdown => {
+        allColumns.forEach(col => dropdown.addOption(col, col || '(auto-detect)'));
+        dropdown.setValue(mainColumns.todo);
+        dropdown.onChange(async (value) => {
+          await this.updateMainColumnMapping(boardPath, 'todo', value);
+          this.renderBoardConfigInSettings(container, boardPath);
+        });
+      });
+    
+    // Progress mapping
+    const progressSetting = new Setting(container)
+      .setName('🚧 Progress Column')
+      .addDropdown(dropdown => {
+        allColumns.forEach(col => dropdown.addOption(col, col || '(auto-detect)'));
+        dropdown.setValue(mainColumns.progress);
+        dropdown.onChange(async (value) => {
+          await this.updateMainColumnMapping(boardPath, 'progress', value);
+          this.renderBoardConfigInSettings(container, boardPath);
+        });
+      });
+    
+    // Done mapping
+    const doneSetting = new Setting(container)
+      .setName('✅ Done Column')
+      .addDropdown(dropdown => {
+        allColumns.forEach(col => dropdown.addOption(col, col || '(auto-detect)'));
+        dropdown.setValue(mainColumns.done);
+        dropdown.onChange(async (value) => {
+          await this.updateMainColumnMapping(boardPath, 'done', value);
+          this.renderBoardConfigInSettings(container, boardPath);
+        });
+      });
+    
+    // Column Order Section
+    container.createEl('hr');
+    container.createEl('h4', { text: '🔀 Column Order' });
+    container.createEl('p', { 
+      text: 'Reorder columns using arrow buttons. Active columns appear in sidebar.',
+      cls: 'setting-item-description'
+    });
+    
+    // Active columns chips
+    const activeChipsArea = container.createDiv('chips-area-inline');
+    activeChipsArea.style.display = 'flex';
+    activeChipsArea.style.flexWrap = 'wrap';
+    activeChipsArea.style.gap = '8px';
+    activeChipsArea.style.marginBottom = '12px';
+    
+    currentOrder.forEach((col, index) => {
+      const chipWrapper = activeChipsArea.createDiv('chip-wrapper-inline');
+      chipWrapper.style.display = 'flex';
+      chipWrapper.style.alignItems = 'center';
+      chipWrapper.style.gap = '4px';
+      
+      const chip = chipWrapper.createDiv('column-chip-inline');
+      chip.style.padding = '4px 8px';
+      chip.style.background = 'var(--interactive-accent)';
+      chip.style.color = 'var(--text-on-accent)';
+      chip.style.borderRadius = '12px';
+      chip.style.fontSize = '0.85em';
+      chip.textContent = col;
+      
+      // Arrow buttons
+      const arrowContainer = chipWrapper.createDiv('chip-arrows-inline');
+      arrowContainer.style.display = 'flex';
+      arrowContainer.style.gap = '2px';
+      
+      if (index > 0) {
+        const leftBtn = arrowContainer.createEl('button', { text: '◀', cls: 'chip-arrow-btn' });
+        leftBtn.style.padding = '2px 6px';
+        leftBtn.style.fontSize = '0.7em';
+        leftBtn.style.cursor = 'pointer';
+        leftBtn.onclick = async () => {
+          await this.moveColumnInOrder(boardPath, index, index - 1);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      }
+      
+      if (index < currentOrder.length - 1) {
+        const rightBtn = arrowContainer.createEl('button', { text: '▶', cls: 'chip-arrow-btn' });
+        rightBtn.style.padding = '2px 6px';
+        rightBtn.style.fontSize = '0.7em';
+        rightBtn.style.cursor = 'pointer';
+        rightBtn.onclick = async () => {
+          await this.moveColumnInOrder(boardPath, index, index + 1);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      }
+      
+      // Remove button
+      const removeBtn = chipWrapper.createEl('button', { text: '✕', cls: 'chip-remove-btn' });
+      removeBtn.style.padding = '2px 6px';
+      removeBtn.style.fontSize = '0.7em';
+      removeBtn.style.cursor = 'pointer';
+      removeBtn.style.color = 'var(--text-error)';
+      removeBtn.onclick = async () => {
+        await this.removeColumnFromOrder(boardPath, index);
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    });
+    
+    // Unused columns
+    const allPossibleColumns = ['📋 To Do', '🚧 In Progress', '✅ Done', 'Backlog', 'Review', 'Blocked', 'Archive'];
+    const unusedColumns = allPossibleColumns.filter(col => !currentOrder.includes(col));
+    
+    if (unusedColumns.length > 0) {
+      container.createEl('p', { text: 'Unused columns (click to add):', cls: 'setting-item-description' });
+      const unusedArea = container.createDiv('unused-chips-inline');
+      unusedArea.style.display = 'flex';
+      unusedArea.style.flexWrap = 'wrap';
+      unusedArea.style.gap = '8px';
+      unusedArea.style.marginBottom = '12px';
+      
+      unusedColumns.forEach(col => {
+        const chip = unusedArea.createDiv('column-chip-unused');
+        chip.style.padding = '4px 8px';
+        chip.style.background = 'var(--background-modifier-border)';
+        chip.style.borderRadius = '12px';
+        chip.style.fontSize = '0.85em';
+        chip.style.cursor = 'pointer';
+        chip.textContent = col;
+        chip.onclick = async () => {
+          await this.addColumnToOrder(boardPath, col);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      });
+    }
+    
+    // Custom Schedule Section
+    container.createEl('hr');
+    container.createEl('h4', { text: '⏱️ Custom Schedule' });
+    
+    // Show current global schedule
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    container.createEl('p', { 
+      text: `Global: ${currentSchedule.name} (🍅${currentSchedule.workDuration || 25}m ☕${currentSchedule.shortBreakDuration || 5}m 🌴${currentSchedule.longBreakDuration || 15}m)`,
+      cls: 'setting-item-description'
+    });
+    
+    // Board-specific schedule
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      container.createEl('p', { text: 'Board schedule:', cls: 'setting-item-description' });
+      const scheduleArea = container.createDiv('schedule-chips-inline');
+      scheduleArea.style.display = 'flex';
+      scheduleArea.style.flexWrap = 'wrap';
+      scheduleArea.style.gap = '8px';
+      scheduleArea.style.marginBottom = '12px';
+      
+      boardSchedule.phases.forEach((phase, index) => {
+        const chipWrapper = scheduleArea.createDiv('schedule-chip-wrapper');
+        chipWrapper.style.display = 'flex';
+        chipWrapper.style.alignItems = 'center';
+        chipWrapper.style.gap = '4px';
+        
+        // Arrow buttons for reordering
+        const arrowContainer = chipWrapper.createDiv('phase-arrows');
+        arrowContainer.style.display = 'flex';
+        arrowContainer.style.flexDirection = 'column';
+        arrowContainer.style.gap = '1px';
+        
+        if (index > 0) {
+          const leftBtn = arrowContainer.createEl('button', { text: '◀', cls: 'phase-arrow-btn' });
+          leftBtn.style.padding = '1px 4px';
+          leftBtn.style.fontSize = '0.6em';
+          leftBtn.style.cursor = 'pointer';
+          leftBtn.style.lineHeight = '1';
+          leftBtn.onclick = async () => {
+            await this.movePhaseInSchedule(boardPath, index, index - 1);
+            this.renderBoardConfigInSettings(container, boardPath);
+          };
+        }
+        
+        if (index < boardSchedule.phases.length - 1) {
+          const rightBtn = arrowContainer.createEl('button', { text: '▶', cls: 'phase-arrow-btn' });
+          rightBtn.style.padding = '1px 4px';
+          rightBtn.style.fontSize = '0.6em';
+          rightBtn.style.cursor = 'pointer';
+          rightBtn.style.lineHeight = '1';
+          rightBtn.onclick = async () => {
+            await this.movePhaseInSchedule(boardPath, index, index + 1);
+            this.renderBoardConfigInSettings(container, boardPath);
+          };
+        }
+        
+        const chip = chipWrapper.createDiv('schedule-chip-inline');
+        chip.style.padding = '4px 8px';
+        chip.style.background = phase.type === 'Work' ? 'var(--text-error-bg)' : 'var(--text-success-bg)';
+        chip.style.borderRadius = '12px';
+        chip.style.fontSize = '0.85em';
+        chip.style.display = 'flex';
+        chip.style.alignItems = 'center';
+        chip.style.gap = '4px';
+        
+        const icon = phase.type === 'Work' ? '🍅' : (phase.type === 'Short Break' ? '☕' : '🌴');
+        chip.innerHTML = `${icon} ${phase.type}: ${phase.duration}m`;
+        
+        // Edit button
+        const editBtn = chip.createEl('button', { text: '✏️', cls: 'chip-edit-btn' });
+        editBtn.style.padding = '0 4px';
+        editBtn.style.fontSize = '0.8em';
+        editBtn.style.cursor = 'pointer';
+        editBtn.onclick = () => {
+          new InputModal(
+            this.app,
+            `Edit ${phase.type} Duration`,
+            'Duration in minutes',
+            phase.duration.toString(),
+            async (newDuration) => {
+              if (newDuration && !isNaN(parseInt(newDuration))) {
+                await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
+                this.renderBoardConfigInSettings(container, boardPath);
+              }
+            }
+          ).open();
+        };
+        
+        // Delete button
+        const deleteBtn = chip.createEl('button', { text: '✕', cls: 'chip-delete-btn' });
+        deleteBtn.style.padding = '0 4px';
+        deleteBtn.style.fontSize = '0.8em';
+        deleteBtn.style.cursor = 'pointer';
+        deleteBtn.style.color = 'var(--text-error)';
+        deleteBtn.onclick = async () => {
+          await this.removePhaseFromSchedule(boardPath, index);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      });
+      
+      // Clear schedule button
+      const clearBtn = container.createEl('button', { text: '🗑️ Clear Board Schedule', cls: 'clear-schedule-btn' });
+      clearBtn.style.marginBottom = '12px';
+      clearBtn.onclick = async () => {
+        delete this.plugin.settings.perBoardSchedule[boardPath];
+        await this.plugin.saveSettings();
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    } else {
+      container.createEl('p', { text: 'No custom schedule. Using global schedule.', cls: 'setting-item-description' });
+    }
+    
+    // Add phase buttons
+    const addPhaseArea = container.createDiv('add-phase-inline');
+    addPhaseArea.style.display = 'flex';
+    addPhaseArea.style.gap = '8px';
+    addPhaseArea.style.flexWrap = 'wrap';
+    
+    const phaseTypes = [
+      { type: 'Work', duration: 25, icon: '🍅' },
+      { type: 'Short Break', duration: 5, icon: '☕' },
+      { type: 'Long Break', duration: 15, icon: '🌴' }
+    ];
+    
+    phaseTypes.forEach(({ type, duration, icon }) => {
+      const btn = addPhaseArea.createEl('button', { text: `${icon} Add ${type}`, cls: 'add-phase-btn' });
+      btn.onclick = async () => {
+        await this.addPhaseToSchedule(boardPath, type, duration);
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    });
+  }
+
+  // Helper methods for board config
+  private async updateMainColumnMapping(boardPath: string, columnType: 'todo' | 'progress' | 'done', columnName: string) {
+    if (!this.plugin.settings.perBoardMainColumns) {
+      this.plugin.settings.perBoardMainColumns = {};
+    }
+    if (!this.plugin.settings.perBoardMainColumns[boardPath]) {
+      this.plugin.settings.perBoardMainColumns[boardPath] = { todo: '', progress: '', done: '' };
+    }
+    this.plugin.settings.perBoardMainColumns[boardPath][columnType] = columnName;
+    
+    // Auto-add to column order if not present
+    if (columnName && !this.plugin.settings.perBoardColumnOrder?.[boardPath]?.includes(columnName)) {
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      if (!this.plugin.settings.perBoardColumnOrder[boardPath]) {
+        this.plugin.settings.perBoardColumnOrder[boardPath] = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+      }
+      this.plugin.settings.perBoardColumnOrder[boardPath].push(columnName);
+      
+      // Auto-create column in Kanban file if it doesn't exist
+      await this.addColumnToKanbanFile(boardPath, columnName);
+    }
+    
+    await this.plugin.saveSettings();
+    console.log('[SETTINGS] Updated main column mapping:', columnType, '=', columnName, 'for', boardPath);
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  private async moveColumnInOrder(boardPath: string, fromIndex: number, toIndex: number) {
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const order = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
+    
+    if (toIndex < 0 || toIndex >= order.length) return;
+    
+    const [removed] = order.splice(fromIndex, 1);
+    order.splice(toIndex, 0, removed);
+    
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    console.log('[SETTINGS] Moved column in order for', boardPath, ':', order);
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  private async removeColumnFromOrder(boardPath: string, index: number) {
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const order = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
+    
+    if (order.length <= 1) return; // Keep at least one column
+    
+    order.splice(index, 1);
+    
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  private async addColumnToOrder(boardPath: string, columnName: string) {
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const order = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
+    
+    if (!order.includes(columnName)) {
+      order.push(columnName);
+      
+      // Auto-create column in Kanban file if it doesn't exist
+      await this.addColumnToKanbanFile(boardPath, columnName);
+    }
+    
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  private async addPhaseToSchedule(boardPath: string, type: string, duration: number) {
+    if (!this.plugin.settings.perBoardSchedule) {
+      this.plugin.settings.perBoardSchedule = {};
+    }
+    if (!this.plugin.settings.perBoardSchedule[boardPath]) {
+      this.plugin.settings.perBoardSchedule[boardPath] = { name: 'Custom', phases: [] };
+    }
+    this.plugin.settings.perBoardSchedule[boardPath].phases.push({ type, duration });
+    await this.plugin.saveSettings();
+    await this.plugin.resetTimer(); // Auto-reset to apply new schedule
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  private async updatePhaseDuration(boardPath: string, index: number, duration: number) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases?.[index]) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases[index].duration = duration;
+      await this.plugin.saveSettings();
+      await this.plugin.resetTimer(); // Auto-reset to apply new schedule
+      this.refreshSidebarAfterSettingsChange();
+    }
+  }
+
+  private async removePhaseFromSchedule(boardPath: string, index: number) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases.splice(index, 1);
+      await this.plugin.saveSettings();
+      await this.plugin.resetTimer(); // Auto-reset to apply new schedule
+      this.refreshSidebarAfterSettingsChange();
+    }
+  }
+
+  private async movePhaseInSchedule(boardPath: string, fromIndex: number, toIndex: number) {
+    const phases = this.plugin.settings.perBoardSchedule?.[boardPath]?.phases;
+    if (!phases || toIndex < 0 || toIndex >= phases.length) return;
+    
+    const [removed] = phases.splice(fromIndex, 1);
+    phases.splice(toIndex, 0, removed);
+    await this.plugin.saveSettings();
+    await this.plugin.resetTimer(); // Auto-reset to apply new schedule
+    this.refreshSidebarAfterSettingsChange();
+  }
+
+  // Refresh sidebar when settings change
+  private refreshSidebarAfterSettingsChange() {
+    const timerView = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view as any;
+    if (timerView && timerView.refreshView) {
+      timerView.refreshView();
+    }
+  }
+
+  /**
+   * Add a new column to the Kanban file if it doesn't exist
+   */
+  private async addColumnToKanbanFile(boardPath: string, columnName: string): Promise<boolean> {
+    try {
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) {
+        console.warn('[KANBAN] File not found:', boardPath);
+        return false;
+      }
+
+      const content = await this.app.vault.read(file);
+      
+      // Check if column already exists (case-insensitive, ignore emojis for matching)
+      const normalizedColumnName = columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim().toLowerCase();
+      const lines = content.split('\n');
+      
+      for (const line of lines) {
+        const headerMatch = line.match(/^##\s+(.+)/);
+        if (headerMatch) {
+          const existingColumn = headerMatch[1].replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim().toLowerCase();
+          if (existingColumn === normalizedColumnName) {
+            console.log('[KANBAN] Column already exists:', columnName);
+            return false; // Column already exists
+          }
+        }
+      }
+
+      // Find where to insert the new column (before the kanban-plugin settings at the end)
+      let insertIndex = lines.length;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes('kanban-plugin:') || lines[i].startsWith('%% ')) {
+          insertIndex = i;
+        } else if (lines[i].trim() !== '') {
+          break;
+        }
+      }
+
+      // Insert the new column
+      const newColumnContent = `\n## ${columnName}\n`;
+      lines.splice(insertIndex, 0, newColumnContent);
+      
+      await this.app.vault.modify(file, lines.join('\n'));
+      console.log('[KANBAN] Added new column:', columnName, 'to', boardPath);
+      
+      new Notice(`Added column "${columnName}" to Kanban board`);
+      return true;
+    } catch (error) {
+      console.error('[KANBAN] Error adding column:', error);
+      new Notice(`Failed to add column: ${error}`);
+      return false;
+    }
   }
 }
 
@@ -2651,6 +3358,69 @@ class ScheduleEditModal extends Modal {
   }
 }
 
+class InputModal extends Modal {
+  private title: string;
+  private placeholder: string;
+  private defaultValue: string;
+  private onSubmit: (value: string | null) => void;
+
+  constructor(app: App, title: string, placeholder: string, defaultValue: string, onSubmit: (value: string | null) => void) {
+    super(app);
+    this.title = title;
+    this.placeholder = placeholder;
+    this.defaultValue = defaultValue;
+    this.onSubmit = onSubmit;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: this.title });
+    
+    const inputEl = contentEl.createEl('input', {
+      type: 'number',
+      placeholder: this.placeholder,
+      value: this.defaultValue
+    });
+    inputEl.style.width = '100%';
+    inputEl.style.padding = '8px';
+    inputEl.style.marginBottom = '12px';
+    inputEl.focus();
+    inputEl.select();
+
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '10px';
+    buttonContainer.style.justifyContent = 'flex-end';
+
+    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
+    cancelButton.onclick = () => {
+      this.onSubmit(null);
+      this.close();
+    };
+
+    const confirmButton = buttonContainer.createEl('button', { text: 'Save', cls: 'mod-cta' });
+    confirmButton.onclick = () => {
+      this.onSubmit(inputEl.value);
+      this.close();
+    };
+
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.onSubmit(inputEl.value);
+        this.close();
+      } else if (e.key === 'Escape') {
+        this.onSubmit(null);
+        this.close();
+      }
+    });
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
 class ConfirmModal extends Modal {
   private message: string;
   private resolve: (confirmed: boolean) => void;
@@ -2700,6 +3470,8 @@ class ConfirmModal extends Modal {
 
 class ProgressColumnConfigModal extends Modal {
   plugin: EnhancedPomodoro;
+  private draggedChip: HTMLElement | null = null;
+  private currentBoardPath: string = '';
 
   constructor(app: App, plugin: EnhancedPomodoro) {
     super(app);
@@ -2707,66 +3479,746 @@ class ProgressColumnConfigModal extends Modal {
   }
 
   onOpen() {
+    console.log('[PROGRESS MODAL] Opening new chips-based modal');
     const { contentEl } = this;
     contentEl.empty();
+    contentEl.addClass('column-config-modal');
 
-    contentEl.createEl('h2', { text: 'Progress Column Configuration' });
+    // Add CSS styles
+    this.addStyles();
+
+    console.log('[PROGRESS MODAL] Creating header and content');
+    contentEl.createEl('h2', { text: '📋 Column & Schedule Configuration' });
     contentEl.createEl('p', { 
-      text: 'Configure which column to use as the "In Progress" column for each kanban board. This helps when boards have multiple progress-like columns.' 
+      text: 'Drag chips to reorder columns. Drag to the "Unused" area to disable a column.',
+      cls: 'modal-description'
     });
 
-    const container = contentEl.createDiv('progress-column-config');
-
-    // Get all kanban files
-    const kanbanFiles = Object.keys(this.plugin.settings.perBoardProgressColumns || {});
+    // Board selector
+    const boardSelector = contentEl.createDiv('board-selector');
+    boardSelector.createEl('label', { text: 'Select Kanban Board:' });
+    const select = boardSelector.createEl('select', { cls: 'board-select' });
     
-    if (kanbanFiles.length === 0) {
-      const emptyState = container.createDiv('empty-state');
-      emptyState.createEl('p', { text: 'No kanban boards configured yet. Use kanban boards first to set up progress column preferences.' });
-    } else {
-      kanbanFiles.forEach(boardPath => {
-        const boardSetting = new Setting(container)
-          .setName(boardPath)
-          .setDesc('Progress column for this board')
-          .addText(text => text
-            .setPlaceholder('In Progress')
-            .setValue(this.plugin.settings.perBoardProgressColumns[boardPath] || '')
-            .onChange(async (value) => {
-              this.plugin.settings.perBoardProgressColumns[boardPath] = value;
-              await this.plugin.saveSettings();
-            })
-          );
-
-        // Add remove button
-        boardSetting.addButton(button => button
-          .setButtonText('Remove')
-          .setWarning()
-          .onClick(async () => {
-            delete this.plugin.settings.perBoardProgressColumns[boardPath];
-            await this.plugin.saveSettings();
-            this.onOpen(); // Refresh modal
-          })
-        );
-      });
+    // Populate boards from settings
+    const defaultOption = select.createEl('option', { value: '', text: '-- Select a board --' });
+    
+    // Get all known kanban boards
+    const knownBoards = new Set([
+      ...Object.keys(this.plugin.settings.perBoardProgressColumns || {}),
+      ...Object.keys(this.plugin.settings.perBoardColumnOrder || {}),
+      ...Object.keys(this.plugin.settings.perBoardSchedule || {})
+    ]);
+    
+    // Also add the currently selected board
+    if (this.plugin.settings.kanbanBoardPath) {
+      knownBoards.add(this.plugin.settings.kanbanBoardPath);
     }
 
-    // Add instructions
-    const instructions = contentEl.createDiv('instructions');
-    instructions.createEl('h3', { text: 'How to use:' });
-    instructions.createEl('ol', {}, ol => {
-      ol.createEl('li', { text: 'Use kanban boards with multiple progress columns' });
-      ol.createEl('li', { text: 'When prompted, select your preferred progress column' });
-      ol.createEl('li', { text: 'Or configure manually here' });
-      ol.createEl('li', { text: 'The plugin will remember your choice for each board' });
+    knownBoards.forEach(boardPath => {
+      const displayName = boardPath.split('/').pop()?.replace('.md', '') || boardPath;
+      select.createEl('option', { value: boardPath, text: displayName });
     });
+
+    // Config container (hidden initially)
+    const configContainer = contentEl.createDiv('config-container');
+    configContainer.style.display = 'none';
+
+    select.onchange = () => {
+      this.currentBoardPath = select.value;
+      if (select.value) {
+        configContainer.style.display = 'block';
+        this.renderBoardConfig(configContainer, select.value);
+      } else {
+        configContainer.style.display = 'none';
+      }
+    };
+
+    // Auto-select current board if available
+    if (this.plugin.settings.kanbanBoardPath) {
+      select.value = this.plugin.settings.kanbanBoardPath;
+      this.currentBoardPath = this.plugin.settings.kanbanBoardPath;
+      configContainer.style.display = 'block';
+      this.renderBoardConfig(configContainer, this.plugin.settings.kanbanBoardPath);
+    }
 
     // Close button
     const buttonContainer = contentEl.createDiv('modal-button-container');
-    buttonContainer.style.marginTop = '20px';
-    buttonContainer.style.textAlign = 'right';
-
-    const closeButton = buttonContainer.createEl('button', { text: 'Close' });
+    const closeButton = buttonContainer.createEl('button', { text: 'Close', cls: 'mod-cta' });
     closeButton.onclick = () => this.close();
+  }
+
+  private renderBoardConfig(container: HTMLElement, boardPath: string) {
+    container.empty();
+    
+    // Section 0: Main Column Mapping
+    container.createEl('h3', { text: '🎯 Main Column Mapping' });
+    container.createEl('p', { text: 'Define which columns serve as the main Todo/Progress/Done columns for this board.', cls: 'section-desc' });
+    
+    const mainColumnsArea = container.createDiv('main-columns-area');
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath] || { todo: '', progress: '', done: '' };
+    
+    // Get all available columns for dropdowns
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const currentOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath] || [...defaultColumns];
+    const allColumns = ['', ...currentOrder, 'Backlog', 'Review', 'Blocked', 'Archive'].filter((v, i, a) => a.indexOf(v) === i);
+    
+    // Todo mapping
+    const todoRow = mainColumnsArea.createDiv('main-column-row');
+    todoRow.createEl('label', { text: '📋 Todo Column:' });
+    const todoSelect = todoRow.createEl('select', { cls: 'main-column-select' });
+    allColumns.forEach(col => {
+      const opt = todoSelect.createEl('option', { value: col, text: col || '(auto-detect)' });
+      if (col === mainColumns.todo) opt.selected = true;
+    });
+    todoSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, 'todo', todoSelect.value);
+      this.renderBoardConfig(container, boardPath); // Re-render to update column order
+    };
+    
+    // Progress mapping
+    const progressRow = mainColumnsArea.createDiv('main-column-row');
+    progressRow.createEl('label', { text: '🚧 Progress Column:' });
+    const progressSelect = progressRow.createEl('select', { cls: 'main-column-select' });
+    allColumns.forEach(col => {
+      const opt = progressSelect.createEl('option', { value: col, text: col || '(auto-detect)' });
+      if (col === mainColumns.progress) opt.selected = true;
+    });
+    progressSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, 'progress', progressSelect.value);
+      this.renderBoardConfig(container, boardPath); // Re-render to update column order
+    };
+    
+    // Done mapping
+    const doneRow = mainColumnsArea.createDiv('main-column-row');
+    doneRow.createEl('label', { text: '✅ Done Column:' });
+    const doneSelect = doneRow.createEl('select', { cls: 'main-column-select' });
+    allColumns.forEach(col => {
+      const opt = doneSelect.createEl('option', { value: col, text: col || '(auto-detect)' });
+      if (col === mainColumns.done) opt.selected = true;
+    });
+    doneSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, 'done', doneSelect.value);
+      this.renderBoardConfig(container, boardPath); // Re-render to update column order
+    };
+
+    container.createEl('hr');
+    
+    // Section 1: Column Ordering
+    container.createEl('h3', { text: '🔀 Column Order' });
+    container.createEl('p', { text: 'Drag to reorder or use arrow buttons. Drag to "Unused" to hide columns.', cls: 'section-desc' });
+    
+    // Active columns area
+    const activeArea = container.createDiv('chips-area active-area');
+    activeArea.createEl('label', { text: 'Active Columns (drag to reorder):' });
+    const activeChips = activeArea.createDiv('chips-container');
+    activeChips.setAttribute('data-area', 'active');
+    
+    currentOrder.forEach((col, index) => {
+      this.createChip(activeChips, col, index, 'active', boardPath, currentOrder.length);
+    });
+
+    // Setup drop zone for active area
+    this.setupDropZone(activeChips, 'active', boardPath);
+
+    // Unused columns area
+    const unusedArea = container.createDiv('chips-area unused-area');
+    unusedArea.createEl('label', { text: 'Unused Columns (drag here to disable):' });
+    const unusedChips = unusedArea.createDiv('chips-container unused');
+    unusedChips.setAttribute('data-area', 'unused');
+    
+    // Example unused columns
+    const allPossibleColumns = ['📋 To Do', '🚧 In Progress', '✅ Done', 'Backlog', 'Review', 'Blocked', 'Archive'];
+    const unusedColumns = allPossibleColumns.filter(col => !currentOrder.includes(col));
+    unusedColumns.forEach((col, index) => {
+      this.createChip(unusedChips, col, index, 'unused', boardPath, unusedColumns.length);
+    });
+
+    this.setupDropZone(unusedChips, 'unused', boardPath);
+
+    // Add custom column button
+    const addColumnContainer = container.createDiv('add-column-container');
+    const addInput = addColumnContainer.createEl('input', { 
+      type: 'text', 
+      placeholder: 'Add custom column name...',
+      cls: 'add-column-input'
+    });
+    const addBtn = addColumnContainer.createEl('button', { text: '+ Add', cls: 'add-column-btn' });
+    addBtn.onclick = async () => {
+      if (addInput.value.trim()) {
+        const newOrder = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns), addInput.value.trim()];
+        if (!this.plugin.settings.perBoardColumnOrder) {
+          this.plugin.settings.perBoardColumnOrder = {};
+        }
+        this.plugin.settings.perBoardColumnOrder[boardPath] = newOrder;
+        await this.plugin.saveSettings();
+        addInput.value = '';
+        this.renderBoardConfig(container, boardPath);
+      }
+    };
+
+    // Section 2: Custom Schedule (horizontal separator)
+    container.createEl('hr');
+    container.createEl('h3', { text: '⏱️ Custom Schedule for this Board' });
+    container.createEl('p', { text: 'Define a custom work/break sequence for this board.', cls: 'section-desc' });
+
+    // Get current schedule from settings (not hardcoded)
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    
+    // Default schedule display - show actual values from settings
+    const defaultSchedule = container.createDiv('default-schedule');
+    defaultSchedule.createEl('label', { text: `Current Global Schedule (${currentSchedule.name}):` });
+    const defaultChipsRow = defaultSchedule.createDiv('schedule-chips-row readonly');
+    this.createScheduleChip(defaultChipsRow, 'Work', currentSchedule.workDuration || 25, true);
+    this.createScheduleChip(defaultChipsRow, 'Short Break', currentSchedule.shortBreakDuration || 5, true);
+    this.createScheduleChip(defaultChipsRow, 'Work', currentSchedule.workDuration || 25, true);
+    this.createScheduleChip(defaultChipsRow, 'Long Break', currentSchedule.longBreakDuration || 15, true);
+
+    // Custom schedule for this board
+    const customSchedule = container.createDiv('custom-schedule');
+    customSchedule.createEl('label', { text: 'Custom Schedule for this Board:' });
+    const customChipsRow = customSchedule.createDiv('schedule-chips-row');
+    customChipsRow.setAttribute('data-area', 'schedule');
+    
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    if (boardSchedule && boardSchedule.phases) {
+      boardSchedule.phases.forEach((phase, index) => {
+        this.createScheduleChip(customChipsRow, phase.type, phase.duration, false, index, boardPath);
+      });
+    } else {
+      customChipsRow.createEl('span', { text: 'No custom schedule. Add phases below.', cls: 'empty-schedule' });
+    }
+
+    // Add phase buttons
+    const addPhaseContainer = container.createDiv('add-phase-container');
+    const phaseTypes = [
+      { type: 'Work', defaultDuration: 25, icon: '🍅' },
+      { type: 'Short Break', defaultDuration: 5, icon: '☕' },
+      { type: 'Long Break', defaultDuration: 15, icon: '🌴' }
+    ];
+    
+    phaseTypes.forEach(phase => {
+      const btn = addPhaseContainer.createEl('button', { 
+        text: `${phase.icon} + ${phase.type}`,
+        cls: 'add-phase-btn'
+      });
+      btn.onclick = async () => {
+        await this.addPhaseToSchedule(boardPath, phase.type, phase.defaultDuration);
+        this.renderBoardConfig(container, boardPath);
+      };
+    });
+
+    // Clear custom schedule button
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      const clearBtn = addPhaseContainer.createEl('button', { text: '🗑️ Clear', cls: 'clear-schedule-btn' });
+      clearBtn.onclick = async () => {
+        delete this.plugin.settings.perBoardSchedule[boardPath];
+        await this.plugin.saveSettings();
+        this.renderBoardConfig(container, boardPath);
+      };
+    }
+  }
+
+  private createChip(container: HTMLElement, text: string, index: number, area: string, boardPath: string, totalCount: number) {
+    const chipWrapper = container.createDiv('chip-wrapper');
+    chipWrapper.setAttribute('data-index', index.toString());
+    
+    const chip = chipWrapper.createDiv('chip');
+    chip.innerHTML = `<span class="chip-text">${text}</span>`;
+    chip.setAttribute('draggable', 'true');
+    chip.setAttribute('data-text', text);
+    chip.setAttribute('data-index', index.toString());
+    chip.setAttribute('data-area', area);
+
+    // Add arrow buttons for active area chips
+    if (area === 'active') {
+      const btnContainer = chipWrapper.createDiv('chip-arrows');
+      
+      // Left arrow (move earlier in order)
+      const leftBtn = btnContainer.createEl('button', { text: '◀', cls: 'chip-arrow-btn' });
+      leftBtn.disabled = index === 0;
+      leftBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.moveChip(boardPath, index, index - 1);
+      };
+      
+      // Right arrow (move later in order)
+      const rightBtn = btnContainer.createEl('button', { text: '▶', cls: 'chip-arrow-btn' });
+      rightBtn.disabled = index === totalCount - 1;
+      rightBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.moveChip(boardPath, index, index + 1);
+      };
+    }
+
+    chip.ondragstart = (e) => {
+      this.draggedChip = chip;
+      chip.addClass('dragging');
+      e.dataTransfer?.setData('text/plain', text);
+    };
+
+    chip.ondragend = () => {
+      chip.removeClass('dragging');
+      this.draggedChip = null;
+      // Remove all drop indicators
+      container.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+    };
+  }
+
+  private async moveChip(boardPath: string, fromIndex: number, toIndex: number) {
+    console.log('[COLUMN ORDER] moveChip called for board:', boardPath);
+    const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+    const activeOrder = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
+    
+    if (toIndex < 0 || toIndex >= activeOrder.length) return;
+    
+    const [removed] = activeOrder.splice(fromIndex, 1);
+    activeOrder.splice(toIndex, 0, removed);
+    
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
+    console.log('[COLUMN ORDER] Saving order for board:', boardPath, activeOrder);
+    await this.plugin.saveSettings();
+    console.log('[COLUMN ORDER] All board orders:', JSON.stringify(this.plugin.settings.perBoardColumnOrder));
+    
+    // Re-render
+    const configContainer = document.querySelector('.config-container') as HTMLElement;
+    if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+  }
+
+  private createScheduleChip(container: HTMLElement, type: string, duration: number, readonly: boolean, index?: number, boardPath?: string) {
+    const chip = container.createDiv('schedule-chip');
+    const icon = type === 'Work' ? '🍅' : (type === 'Short Break' ? '☕' : '🌴');
+    chip.innerHTML = `${icon} <strong>${type}</strong>: ${duration}m`;
+    
+    if (readonly) {
+      chip.addClass('readonly');
+    } else if (index !== undefined && boardPath) {
+      // Add edit and delete buttons
+      const editBtn = chip.createEl('button', { text: '✏️', cls: 'chip-btn edit' });
+      editBtn.onclick = (e) => {
+        e.stopPropagation();
+        console.log('[SCHEDULE EDIT] Edit button clicked for', type, 'at index', index);
+        new InputModal(
+          this.app,
+          `Edit ${type} Duration`,
+          'Duration in minutes',
+          duration.toString(),
+          async (newDuration) => {
+            console.log('[SCHEDULE EDIT] User entered:', newDuration);
+            if (newDuration && !isNaN(parseInt(newDuration))) {
+              console.log('[SCHEDULE EDIT] Updating duration to', parseInt(newDuration));
+              await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
+              // Find parent config container and re-render
+              const configContainer = container.closest('.config-container') as HTMLElement;
+              if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+            }
+          }
+        ).open();
+      };
+      
+      const deleteBtn = chip.createEl('button', { text: '✕', cls: 'chip-btn delete' });
+      deleteBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.removePhaseFromSchedule(boardPath, index);
+        const configContainer = container.closest('.config-container') as HTMLElement;
+        if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+      };
+    }
+  }
+
+  private isMainColumn(columnName: string): boolean {
+    const lowerName = columnName.toLowerCase();
+    const todoEquivalents = ['todo', 'to do', 'to-do', 'backlog', '📋 to do'];
+    const progressEquivalents = ['in progress', 'in-progress', 'doing', 'working', '🚧 in progress'];
+    const doneEquivalents = ['done', 'completed', 'finished', '✅ done'];
+    
+    return todoEquivalents.some(eq => lowerName.includes(eq)) ||
+           progressEquivalents.some(eq => lowerName.includes(eq)) ||
+           doneEquivalents.some(eq => lowerName.includes(eq));
+  }
+
+  private hasRequiredColumns(columns: string[]): { valid: boolean, missing: string[] } {
+    const lowerColumns = columns.map(c => c.toLowerCase());
+    const missing: string[] = [];
+    
+    const hasTodo = lowerColumns.some(c => 
+      c.includes('todo') || c.includes('to do') || c.includes('to-do') || c.includes('backlog'));
+    const hasProgress = lowerColumns.some(c => 
+      c.includes('in progress') || c.includes('in-progress') || c.includes('doing') || c.includes('working'));
+    const hasDone = lowerColumns.some(c => 
+      c.includes('done') || c.includes('completed') || c.includes('finished'));
+    
+    if (!hasTodo) missing.push('To Do (or Backlog)');
+    if (!hasProgress) missing.push('In Progress');
+    if (!hasDone) missing.push('Done');
+    
+    return { valid: missing.length === 0, missing };
+  }
+
+  private setupDropZone(container: HTMLElement, area: string, boardPath: string) {
+    container.ondragover = (e) => {
+      e.preventDefault();
+      container.addClass('drag-over');
+      
+      // Show drop indicator for active area
+      if (area === 'active' && this.draggedChip) {
+        const wrappers = Array.from(container.querySelectorAll('.chip-wrapper'));
+        const dropX = e.clientX;
+        
+        // Remove existing indicators
+        container.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+        
+        // Find insertion point
+        let insertBefore: Element | null = null;
+        for (const wrapper of wrappers) {
+          const rect = wrapper.getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            insertBefore = wrapper;
+            break;
+          }
+        }
+        
+        // Create drop indicator
+        const indicator = document.createElement('div');
+        indicator.className = 'drop-indicator';
+        if (insertBefore) {
+          container.insertBefore(indicator, insertBefore);
+        } else {
+          container.appendChild(indicator);
+        }
+      }
+    };
+
+    container.ondragleave = (e) => {
+      // Only remove if actually leaving the container
+      const relatedTarget = e.relatedTarget as HTMLElement;
+      if (!container.contains(relatedTarget)) {
+        container.removeClass('drag-over');
+        container.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+      }
+    };
+
+    container.ondrop = async (e) => {
+      e.preventDefault();
+      container.removeClass('drag-over');
+      container.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+      
+      if (!this.draggedChip) return;
+
+      const chipText = this.draggedChip.getAttribute('data-text') || '';
+      const fromArea = this.draggedChip.getAttribute('data-area') || '';
+
+      // Get current orders
+      const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+      let activeOrder = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
+
+      if (area === 'active' && fromArea === 'unused') {
+        // Moving from unused to active - find drop position
+        const wrappers = Array.from(container.querySelectorAll('.chip-wrapper'));
+        const dropX = e.clientX;
+        let dropIndex = wrappers.length;
+        for (let i = 0; i < wrappers.length; i++) {
+          const rect = wrappers[i].getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            dropIndex = i;
+            break;
+          }
+        }
+        activeOrder.splice(dropIndex, 0, chipText);
+      } else if (area === 'unused' && fromArea === 'active') {
+        // Moving from active to unused - validate first
+        const newOrder = activeOrder.filter(col => col !== chipText);
+        const validation = this.hasRequiredColumns(newOrder);
+        
+        if (!validation.valid) {
+          // Show warning and prevent removal
+          const notice = document.createElement('div');
+          notice.className = 'validation-warning';
+          notice.innerHTML = `⚠️ Cannot remove: Need at least one column for: ${validation.missing.join(', ')}`;
+          container.closest('.config-container')?.prepend(notice);
+          setTimeout(() => notice.remove(), 3000);
+          return;
+        }
+        activeOrder = newOrder;
+      } else if (area === 'active' && fromArea === 'active') {
+        // Reordering within active
+        const dragIndex = parseInt(this.draggedChip.getAttribute('data-index') || '0');
+        const wrappers = Array.from(container.querySelectorAll('.chip-wrapper'));
+        
+        // Find drop position based on mouse position
+        const dropX = e.clientX;
+        let dropIndex = wrappers.length;
+        for (let i = 0; i < wrappers.length; i++) {
+          const rect = wrappers[i].getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            dropIndex = i;
+            break;
+          }
+        }
+
+        // Reorder
+        const [removed] = activeOrder.splice(dragIndex, 1);
+        if (dropIndex > dragIndex) dropIndex--;
+        activeOrder.splice(dropIndex, 0, removed);
+      }
+
+      // Save
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
+      await this.plugin.saveSettings();
+
+      // Re-render
+      const configContainer = container.closest('.config-container') as HTMLElement;
+      if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+    };
+  }
+
+  private async updateMainColumnMapping(boardPath: string, columnType: 'todo' | 'progress' | 'done', columnName: string) {
+    console.log('[MAIN COLUMNS] updateMainColumnMapping called for board:', boardPath, 'type:', columnType, 'value:', columnName);
+    if (!this.plugin.settings.perBoardMainColumns) {
+      this.plugin.settings.perBoardMainColumns = {};
+    }
+    if (!this.plugin.settings.perBoardMainColumns[boardPath]) {
+      this.plugin.settings.perBoardMainColumns[boardPath] = { todo: '', progress: '', done: '' };
+    }
+    
+    const oldColumnName = this.plugin.settings.perBoardMainColumns[boardPath][columnType];
+    this.plugin.settings.perBoardMainColumns[boardPath][columnType] = columnName;
+    
+    // Auto-update column order: add new column to active if not present, and ensure proper ordering
+    if (columnName && !this.plugin.settings.perBoardColumnOrder?.[boardPath]?.includes(columnName)) {
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      if (!this.plugin.settings.perBoardColumnOrder[boardPath]) {
+        this.plugin.settings.perBoardColumnOrder[boardPath] = ['📋 To Do', '🚧 In Progress', '✅ Done'];
+      }
+      
+      // Insert the new column at the appropriate position based on type
+      const order = this.plugin.settings.perBoardColumnOrder[boardPath];
+      if (columnType === 'todo') {
+        // Insert at beginning
+        order.unshift(columnName);
+      } else if (columnType === 'progress') {
+        // Insert after todo columns (index 1)
+        const insertIdx = Math.min(1, order.length);
+        order.splice(insertIdx, 0, columnName);
+      } else if (columnType === 'done') {
+        // Insert at end
+        order.push(columnName);
+      }
+      
+      // Remove the old default column if it was replaced
+      const defaultMap: Record<string, string> = { todo: '📋 To Do', progress: '🚧 In Progress', done: '✅ Done' };
+      const defaultCol = defaultMap[columnType];
+      if (defaultCol && order.includes(defaultCol) && columnName !== defaultCol) {
+        const idx = order.indexOf(defaultCol);
+        if (idx !== -1) order.splice(idx, 1);
+      }
+    }
+    
+    await this.plugin.saveSettings();
+    console.log('[MAIN COLUMNS] Updated', columnType, 'to', columnName, 'for board', boardPath);
+  }
+
+  private async addPhaseToSchedule(boardPath: string, type: string, duration: number) {
+    if (!this.plugin.settings.perBoardSchedule) {
+      this.plugin.settings.perBoardSchedule = {};
+    }
+    if (!this.plugin.settings.perBoardSchedule[boardPath]) {
+      this.plugin.settings.perBoardSchedule[boardPath] = { name: 'Custom', phases: [] };
+    }
+    this.plugin.settings.perBoardSchedule[boardPath].phases.push({ type, duration });
+    await this.plugin.saveSettings();
+  }
+
+  private async updatePhaseDuration(boardPath: string, index: number, duration: number) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases?.[index]) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases[index].duration = duration;
+      await this.plugin.saveSettings();
+    }
+  }
+
+  private async removePhaseFromSchedule(boardPath: string, index: number) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases.splice(index, 1);
+      await this.plugin.saveSettings();
+    }
+  }
+
+  private addStyles() {
+    const styleId = 'column-config-modal-styles';
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .column-config-modal { max-width: 600px; }
+      .column-config-modal .modal-description { color: var(--text-muted); margin-bottom: 16px; }
+      .column-config-modal .section-desc { color: var(--text-muted); font-size: 0.9em; margin: 4px 0 12px; }
+      
+      .board-selector { margin-bottom: 20px; }
+      .board-selector label { display: block; margin-bottom: 6px; font-weight: 600; }
+      .board-select { width: 100%; padding: 8px; border-radius: 4px; }
+      
+      .chips-area { margin-bottom: 16px; }
+      .chips-area label { display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-muted); }
+      
+      .chips-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        min-height: 44px;
+        padding: 12px;
+        border: 2px dashed var(--background-modifier-border);
+        border-radius: 8px;
+        background: var(--background-secondary);
+        align-items: flex-start;
+      }
+      .chips-container.unused { background: var(--background-secondary-alt); border-color: var(--text-faint); }
+      .chips-container.drag-over { border-color: var(--interactive-accent); background: var(--background-modifier-hover); }
+      
+      .chip-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+      }
+      
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 12px;
+        background: var(--interactive-accent);
+        color: var(--text-on-accent);
+        border-radius: 16px;
+        cursor: grab;
+        font-size: 0.9em;
+        transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+      }
+      .chip:hover { transform: scale(1.05); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+      .chip.dragging { opacity: 0.5; cursor: grabbing; }
+      .unused .chip { background: var(--background-modifier-border); color: var(--text-muted); }
+      .chip-text { pointer-events: none; }
+      
+      .chip-arrows {
+        display: flex;
+        gap: 2px;
+      }
+      .chip-arrow-btn {
+        background: var(--background-modifier-border);
+        border: none;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 0.7em;
+        cursor: pointer;
+        opacity: 0.7;
+        transition: opacity 0.15s, background 0.15s;
+      }
+      .chip-arrow-btn:hover:not(:disabled) { opacity: 1; background: var(--interactive-accent); color: var(--text-on-accent); }
+      .chip-arrow-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+      
+      .drop-indicator {
+        width: 3px;
+        height: 40px;
+        background: var(--interactive-accent);
+        border-radius: 2px;
+        animation: pulse 0.8s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      .validation-warning {
+        background: var(--background-modifier-error);
+        color: var(--text-on-accent);
+        padding: 10px 14px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        font-size: 0.9em;
+        animation: shake 0.3s ease-in-out;
+      }
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-5px); }
+        75% { transform: translateX(5px); }
+      }
+      
+      .main-columns-area { margin-bottom: 16px; }
+      .main-column-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .main-column-row label {
+        min-width: 140px;
+        font-weight: 500;
+      }
+      .main-column-select {
+        flex: 1;
+        padding: 6px 10px;
+        border-radius: 4px;
+        background: var(--background-secondary);
+        border: 1px solid var(--background-modifier-border);
+      }
+      
+      .add-column-container { display: flex; gap: 8px; margin-top: 8px; }
+      .add-column-input { flex: 1; padding: 6px 10px; border-radius: 4px; }
+      .add-column-btn { padding: 6px 12px; }
+      
+      .default-schedule, .custom-schedule { margin-bottom: 16px; }
+      .default-schedule label, .custom-schedule label { display: block; margin-bottom: 8px; font-weight: 500; }
+      
+      .schedule-chips-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px;
+        border-radius: 8px;
+        background: var(--background-secondary);
+        min-height: 40px;
+      }
+      .schedule-chips-row.readonly { opacity: 0.7; }
+      
+      .schedule-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: var(--background-modifier-border);
+        border-radius: 6px;
+        font-size: 0.85em;
+      }
+      .schedule-chip.readonly { background: var(--background-secondary-alt); }
+      .schedule-chip strong { margin: 0 2px; }
+      .chip-btn { 
+        background: transparent; 
+        border: none; 
+        cursor: pointer; 
+        padding: 2px 4px; 
+        font-size: 0.8em;
+        opacity: 0.6;
+      }
+      .chip-btn:hover { opacity: 1; }
+      .chip-btn.delete:hover { color: var(--text-error); }
+      
+      .add-phase-container { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .add-phase-btn { padding: 6px 12px; font-size: 0.85em; }
+      .clear-schedule-btn { background: var(--background-modifier-error); color: var(--text-on-accent); }
+      
+      .empty-schedule { color: var(--text-faint); font-style: italic; }
+      
+      .modal-button-container { margin-top: 24px; text-align: right; }
+      
+      hr { margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border); }
+    `;
+    document.head.appendChild(style);
   }
 
   onClose() {

@@ -1,4 +1,4 @@
-import { ItemView, TFile, WorkspaceLeaf, Notice } from 'obsidian';
+import { ItemView, TFile, WorkspaceLeaf, Notice, Menu } from 'obsidian';
 import EnhancedPomodoro from './main';
 
 export const CIRCULAR_TIMER_VIEW = 'circular-timer-view';
@@ -30,17 +30,30 @@ export default class CircularTimerView extends ItemView {
   
   // Container reference
   container: HTMLElement | null = null;
+  
+  // Selected calendar date (for sync button)
+  selectedCalendarDate: Date = new Date();
+  
+  // Active task display reference
+  activeTaskDisplay: HTMLElement | null = null;
+  activeTaskText: string = '';
+  
+  // Quick scroll buttons container
+  quickScrollContainer: HTMLElement | null = null;
+  columnButtons: Map<string, HTMLButtonElement> = new Map();
 
   // Button references
   private playBtn: HTMLElement | null = null;
   private settingsBtn: HTMLElement | null = null;
   private resetBtn: HTMLElement | null = null;
   private endCycleBtn: HTMLElement | null = null;
+  private muteBtn: HTMLElement | null = null;
 
   private kanbanSelector: HTMLSelectElement | null = null;
   private refreshButton: HTMLButtonElement | null = null;
   private openFileButton: HTMLButtonElement | null = null;
   private warningElement: HTMLElement | null = null;
+  private isLoadingKanbanBoards: boolean = false;
   private warningTimeout: number | null = null;
   private isDragging: boolean = false;
   private dragTarget: 'start' | 'end' | null = null;
@@ -150,6 +163,29 @@ export default class CircularTimerView extends ItemView {
     svgContainer.appendChild(this.svgElement);
     timerContainer.appendChild(svgContainer);
     
+    // Add active task display directly under timer (TaskNotes-style)
+    this.activeTaskDisplay = timerContainer.createDiv('active-task-display');
+    this.activeTaskDisplay.style.textAlign = 'center';
+    this.activeTaskDisplay.style.padding = '0.5rem';
+    this.activeTaskDisplay.style.fontSize = '0.9em';
+    this.activeTaskDisplay.style.fontWeight = '500';
+    this.activeTaskDisplay.style.color = 'var(--text-muted)';
+    this.activeTaskDisplay.style.borderTop = '1px solid var(--background-modifier-border)';
+    this.activeTaskDisplay.style.marginTop = '0.5rem';
+    this.activeTaskDisplay.innerHTML = '<span style="opacity: 0.6">No task selected</span>';
+    
+    // Add current schedule display below active task
+    const scheduleDisplay = timerContainer.createDiv('schedule-display');
+    scheduleDisplay.style.textAlign = 'center';
+    scheduleDisplay.style.padding = '0.25rem 0.5rem';
+    scheduleDisplay.style.fontSize = '0.75em';
+    scheduleDisplay.style.color = 'var(--text-faint)';
+    scheduleDisplay.style.display = 'flex';
+    scheduleDisplay.style.justifyContent = 'center';
+    scheduleDisplay.style.gap = '8px';
+    scheduleDisplay.style.flexWrap = 'wrap';
+    this.updateScheduleDisplay(scheduleDisplay);
+    
     // Add controls below the timer
     const controls = container.createDiv('pomodoro-controls');
     
@@ -214,6 +250,16 @@ export default class CircularTimerView extends ItemView {
     manualContent.style.right = '0';
     manualContent.style.bottom = '0';
     manualContent.style.overflow = 'auto';
+    manualContent.style.display = 'flex';
+    manualContent.style.flexDirection = 'column';
+    
+    // Add quick scroll buttons container (Todo / In Progress / Done)
+    this.quickScrollContainer = manualContent.createDiv('quick-scroll-buttons');
+    this.quickScrollContainer.style.display = 'flex';
+    this.quickScrollContainer.style.gap = '4px';
+    this.quickScrollContainer.style.padding = '8px';
+    this.quickScrollContainer.style.borderBottom = '1px solid var(--background-modifier-border)';
+    this.quickScrollContainer.style.flexShrink = '0';
     
     // Move tasks container to manual content
     this.tasksContainer = manualContent.createDiv('pomodoro-tasks');
@@ -246,17 +292,9 @@ export default class CircularTimerView extends ItemView {
     this.animate();
     
     // Small delay to ensure metadata cache is ready and reload boards
+    // NOTE: loadKanbanBoards -> loadKanbanBoardsWithDropdown already handles loading tasks
     setTimeout(async () => {
       await this.loadKanbanBoards();
-      
-      // Load tasks from the selected Kanban board if one is set
-      if (this.plugin.settings.kanbanBoardPath) {
-        try {
-          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-        } catch (error) {
-          console.error('Failed loading Kanban tasks:', error);
-        }
-      }
     }, 500);
   }
   
@@ -462,6 +500,12 @@ export default class CircularTimerView extends ItemView {
     // Create mini calendar
     const miniCalendar = miniCalendarContent.createDiv('mini-calendar');
     this.createMiniCalendar(miniCalendar);
+    
+    // Create sync button section
+    const syncSection = miniCalendarContent.createDiv('sync-section');
+    syncSection.style.marginTop = '10px';
+    syncSection.style.marginBottom = '10px';
+    this.createSyncButton(syncSection);
   }
 
   private loadCalendarTasksView() {
@@ -605,12 +649,244 @@ kanban-plugin: board
     const miniCalendar = calendarContent.createDiv('mini-calendar');
     this.createMiniCalendar(miniCalendar);
     
+    // Create sync button section
+    const syncSection = calendarContent.createDiv('sync-section');
+    syncSection.style.marginTop = '10px';
+    syncSection.style.marginBottom = '10px';
+    this.createSyncButton(syncSection);
+    
     // Create today's tasks section
     const todayTasks = calendarContent.createDiv('today-tasks');
     todayTasks.createEl('h3', { text: 'Today' });
     
     const tasksList = todayTasks.createDiv('kanban-style-tasks');
     this.loadTodayTasks(tasksList);
+  }
+  
+  private createSyncButton(container: HTMLElement) {
+    // Clear existing content
+    container.empty();
+    
+    const selectedDate = this.selectedCalendarDate;
+    const kanbanPath = this.getDailyNotePath(selectedDate);
+    const kanbanFile = this.app.vault.getAbstractFileByPath(kanbanPath);
+    const hasKanbanFile = kanbanFile instanceof TFile;
+    
+    // Format selected date for display
+    const dateStr = selectedDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      year: selectedDate.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+    });
+    
+    const isToday = this.isSameDay(selectedDate, new Date());
+    const dateLabel = isToday ? 'Today' : dateStr;
+    
+    const syncBtn = container.createEl('button', {
+      text: `🔄 Sync ${dateLabel} → Daily Note`,
+      cls: 'sync-kanban-btn'
+    });
+    syncBtn.style.width = '100%';
+    syncBtn.style.padding = '8px';
+    syncBtn.style.cursor = hasKanbanFile ? 'pointer' : 'not-allowed';
+    syncBtn.style.opacity = hasKanbanFile ? '1' : '0.5';
+    syncBtn.disabled = !hasKanbanFile;
+    
+    if (!hasKanbanFile) {
+      syncBtn.title = `No Kanban file exists for ${dateLabel}. Create one first.`;
+    } else {
+      syncBtn.title = `Copy tasks from ${dateLabel}'s Kanban to Daily Note`;
+    }
+    
+    syncBtn.onclick = async () => {
+      if (!hasKanbanFile) return;
+      await this.syncKanbanToDailyNote(selectedDate);
+    };
+  }
+  
+  private isSameDay(date1: Date, date2: Date): boolean {
+    return date1.getFullYear() === date2.getFullYear() &&
+           date1.getMonth() === date2.getMonth() &&
+           date1.getDate() === date2.getDate();
+  }
+  
+  private async syncKanbanToDailyNote(date: Date): Promise<void> {
+    const dateYear = date.getFullYear();
+    const dateMonth = String(date.getMonth() + 1).padStart(2, '0');
+    const dateDay = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${dateYear}-${dateMonth}-${dateDay}`;
+    
+    const kanbanPath = this.getDailyNotePath(date);
+    const dailyNotePath = `Daily Note ${dateStr}.md`;
+    
+    try {
+      // Read Kanban file
+      const kanbanFile = this.app.vault.getAbstractFileByPath(kanbanPath);
+      if (!(kanbanFile instanceof TFile)) {
+        new Notice('No Kanban file found for this day');
+        return;
+      }
+      
+      const kanbanContent = await this.app.vault.read(kanbanFile);
+      const tasks = this.extractTasksFromKanban(kanbanContent);
+      
+      if (tasks.length === 0) {
+        new Notice('No tasks found in Kanban file');
+        return;
+      }
+      
+      // Format tasks for daily note
+      const tasksSection = this.formatTasksForDailyNote(tasks);
+      
+      // Check if daily note exists
+      let dailyNoteFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
+      
+      if (dailyNoteFile instanceof TFile) {
+        // Update existing daily note
+        let content = await this.app.vault.read(dailyNoteFile);
+        
+        // Check if there's already a synced tasks section
+        const syncMarker = '## Tasks from Kanban';
+        if (content.includes(syncMarker)) {
+          // Replace existing synced section
+          const regex = new RegExp(`${syncMarker}[\\s\\S]*?(?=\\n## |$)`, 'g');
+          content = content.replace(regex, tasksSection);
+        } else {
+          // Add synced section after ## Tasks or at the end
+          if (content.includes('## Tasks')) {
+            content = content.replace('## Tasks', `## Tasks\n\n${tasksSection}`);
+          } else {
+            content += `\n\n${tasksSection}`;
+          }
+        }
+        
+        await this.app.vault.modify(dailyNoteFile, content);
+        new Notice(`Synced ${tasks.length} tasks to Daily Note`);
+      } else {
+        // Create new daily note with synced tasks
+        const newContent = `# Daily Note ${dateStr}\n\n## Tasks\n\n${tasksSection}\n\n## Notes\n`;
+        await this.app.vault.create(dailyNotePath, newContent);
+        new Notice(`Created Daily Note with ${tasks.length} tasks`);
+      }
+      
+    } catch (error) {
+      console.error('[SYNC] Failed to sync Kanban to Daily Note:', error);
+      new Notice('Failed to sync tasks. Check console for details.');
+    }
+  }
+  
+  private extractTasksFromKanban(content: string): Array<{text: string, column: string, completed: boolean, timeSeconds: number}> {
+    const tasks: Array<{text: string, column: string, completed: boolean, timeSeconds: number}> = [];
+    let currentColumn = '';
+    
+    const lines = content.split('\n');
+    for (const line of lines) {
+      // Detect column headers
+      const headerMatch = line.match(/^##\s+(.+)/);
+      if (headerMatch) {
+        currentColumn = headerMatch[1].trim();
+        continue;
+      }
+      
+      // Detect checkbox tasks
+      const checkboxMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/);
+      if (checkboxMatch && currentColumn) {
+        let text = checkboxMatch[2].trim();
+        
+        // Extract timer info before removing it
+        let timeSeconds = 0;
+        // More flexible regex: matches " - 🍎 0:01" or " - 0:01" or just the time at end
+        const timerMatch = text.match(/ - (?:🍎\s*)?(\d+):(\d{2})/) || text.match(/(\d+):(\d{2})$/);
+        console.log('[SYNC EXTRACT] Task text:', text, 'Timer match:', timerMatch);
+        if (timerMatch) {
+          const minutes = parseInt(timerMatch[1], 10);
+          const seconds = parseInt(timerMatch[2], 10);
+          timeSeconds = minutes * 60 + seconds;
+        }
+        
+        // Remove timer info from text (flexible pattern)
+        text = text.replace(/ - (?:🍎\s*)?\d+:\d{2}/, '').trim();
+        // Remove tags at the end
+        text = text.replace(/#\S+\s*$/g, '').trim();
+        
+        if (text) {
+          tasks.push({
+            text,
+            column: currentColumn,
+            completed: checkboxMatch[1].toLowerCase() === 'x',
+            timeSeconds
+          });
+        }
+      }
+    }
+    
+    return tasks;
+  }
+  
+  private formatTimeHHMM(totalSeconds: number): string {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  }
+  
+  private formatTasksForDailyNote(tasks: Array<{text: string, column: string, completed: boolean, timeSeconds: number}>): string {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const includeWorkTime = this.plugin.settings.includeWorkTimeInSync;
+    
+    let output = `## Tasks from Kanban\n`;
+    output += `*Synced at ${timeStr}*\n\n`;
+    
+    // Group tasks by column
+    const byColumn: Record<string, typeof tasks> = {};
+    for (const task of tasks) {
+      if (!byColumn[task.column]) {
+        byColumn[task.column] = [];
+      }
+      byColumn[task.column].push(task);
+    }
+    
+    // Calculate totals
+    let totalWorkSeconds = 0;
+    let finishedWorkSeconds = 0;
+    
+    for (const task of tasks) {
+      totalWorkSeconds += task.timeSeconds;
+      if (task.completed) {
+        finishedWorkSeconds += task.timeSeconds;
+      }
+    }
+    
+    // Output by column
+    for (const [column, columnTasks] of Object.entries(byColumn)) {
+      output += `### ${column}\n`;
+      for (const task of columnTasks) {
+        const checkbox = task.completed ? '[x]' : '[ ]';
+        if (includeWorkTime && task.timeSeconds > 0) {
+          output += `- ${checkbox} ${task.text} ⏱️ ${this.formatTimeHHMM(task.timeSeconds)}\n`;
+        } else {
+          output += `- ${checkbox} ${task.text}\n`;
+        }
+      }
+      output += '\n';
+    }
+    
+    // Add work time summary if enabled
+    if (includeWorkTime && totalWorkSeconds > 0) {
+      output += `---\n\n`;
+      output += `### 📊 Work Time Summary\n\n`;
+      output += `| Metric | Time |\n`;
+      output += `|--------|------|\n`;
+      output += `| **Total Work** | ${this.formatTimeHHMM(totalWorkSeconds)} |\n`;
+      output += `| **Finished Tasks** | ${this.formatTimeHHMM(finishedWorkSeconds)} |\n`;
+      output += `| **In Progress** | ${this.formatTimeHHMM(totalWorkSeconds - finishedWorkSeconds)} |\n`;
+      output += `\n`;
+    }
+    
+    return output;
   }
 
   private createMiniCalendar(container: HTMLElement) {
@@ -648,11 +924,35 @@ kanban-plugin: board
         dayEl.classList.add('today');
       }
       
-      // Add click handler to navigate to daily note
+      // Check if this day is currently selected
+      const thisDate = new Date(year, month, day);
+      if (this.isSameDay(thisDate, this.selectedCalendarDate)) {
+        dayEl.classList.add('selected');
+      }
+      
+      // Add click handler to select day and update sync button
       dayEl.onclick = () => {
         const date = new Date(year, month, day);
-        const dateStr = date.toISOString().split('T')[0];
-        const dailyNoteName = `Daily Note ${dateStr}`;
+        
+        // Update selected date
+        this.selectedCalendarDate = date;
+        
+        // Update visual selection
+        grid.querySelectorAll('.calendar-day.selected').forEach(el => el.classList.remove('selected'));
+        dayEl.classList.add('selected');
+        
+        // Refresh sync button with new date
+        const syncSection = this.container?.querySelector('.sync-section') as HTMLElement;
+        if (syncSection) {
+          this.createSyncButton(syncSection);
+        }
+        
+        // Also open the daily note for this date
+        const dateYear = date.getFullYear();
+        const dateMonth = String(date.getMonth() + 1).padStart(2, '0');
+        const dateDay = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${dateYear}-${dateMonth}-${dateDay}`;
+        const dailyNoteName = `Daily Note ${dateStr}.md`;
         
         // Try to find existing daily note or create new one
         const file = this.app.vault.getAbstractFileByPath(dailyNoteName);
@@ -660,11 +960,12 @@ kanban-plugin: board
           this.app.workspace.getLeaf().openFile(file);
         } else {
           // Create new daily note
-          this.app.vault.create(dailyNoteName, `# ${dailyNoteName}\n\n## Tasks\n\n## Notes\n`);
-          const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
-          if (newFile instanceof TFile) {
-            this.app.workspace.getLeaf().openFile(newFile);
-          }
+          this.app.vault.create(dailyNoteName, `# Daily Note ${dateStr}\n\n## Tasks\n\n## Notes\n`).then(() => {
+            const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
+            if (newFile instanceof TFile) {
+              this.app.workspace.getLeaf().openFile(newFile);
+            }
+          });
         }
       };
     }
@@ -748,6 +1049,9 @@ kanban-plugin: board
         const columnEl = columnsContainer.createDiv('kanban-column');
         columnEl.createEl('h4', { text: column.title });
         
+        // Determine if this is a "Done" column
+        const isDoneColumn = this.isDoneColumn(column.title);
+        
         const tasksList = columnEl.createDiv('column-tasks');
         
         if (column.tasks.length === 0) {
@@ -755,15 +1059,30 @@ kanban-plugin: board
         } else {
           column.tasks.forEach(task => {
             const taskEl = tasksList.createDiv('kanban-task');
-            const checkbox = taskEl.createEl('input', { type: 'checkbox' });
-            checkbox.checked = task.completed;
+            
+            if (isDoneColumn) {
+              // Done column: show checked checkbox (read-only)
+              const checkbox = taskEl.createEl('input', { type: 'checkbox' });
+              checkbox.checked = true;
+              checkbox.disabled = true; // Read-only, just for display
+              checkbox.style.cursor = 'default';
+              taskEl.classList.add('completed');
+            } else {
+              // In Progress / Todo: show status indicator instead of checkbox
+              const statusIndicator = taskEl.createSpan('task-status-indicator');
+              if (this.isProgressColumn(column.title)) {
+                statusIndicator.textContent = '🚧'; // In Progress indicator
+                statusIndicator.title = 'In Progress';
+              } else {
+                statusIndicator.textContent = '○'; // Todo/backlog indicator (empty circle)
+                statusIndicator.title = 'To Do';
+              }
+              statusIndicator.style.marginRight = '8px';
+              statusIndicator.style.fontSize = '14px';
+            }
             
             const taskTextEl = taskEl.createSpan('task-text');
             taskTextEl.textContent = task.text;
-            
-            if (task.completed) {
-              taskEl.classList.add('completed');
-            }
           });
         }
       });
@@ -885,9 +1204,7 @@ kanban-plugin: board
       return;
     }
     
-    // Add task context display between SVG and buttons
-    const taskContextDiv = timerContainer.createDiv('task-context-display');
-    this.updateTaskContextDisplay();
+    // NOTE: Removed taskContextDiv - now using activeTaskDisplay under timer instead
     
     // Create button group below the SVG
     const btnGroup = timerContainer.createDiv({ cls: 'btn-group' });
@@ -972,6 +1289,22 @@ kanban-plugin: board
       }
     });
     
+    // Mute button (secondary group)
+    const isMuted = this.plugin.settings.muteSounds;
+    const muteBtn = this.createControlButton(secondaryControls, {
+      icon: isMuted 
+        ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>'
+        : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>',
+      text: isMuted ? 'Unmute' : 'Mute',
+      ariaLabel: isMuted ? 'Unmute Sounds' : 'Mute Sounds',
+      onClick: async () => {
+        this.plugin.settings.muteSounds = !this.plugin.settings.muteSounds;
+        await this.plugin.saveSettings();
+        this.updateMuteButton();
+      }
+    });
+    this.muteBtn = muteBtn;
+    
     // Store references for updates (SVG text elements)
     this.modeSpan = modeText as any; // SVG text element
     this.timeSpan = timeText as any; // SVG text element
@@ -1019,6 +1352,25 @@ kanban-plugin: board
     // Update the progress circle
     this.progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
     this.progressCircle.style.strokeDashoffset = offset.toString();
+  }
+
+  // Update mute button icon and text based on current mute state
+  public updateMuteButton() {
+    if (!this.muteBtn) return;
+    
+    const isMuted = this.plugin.settings.muteSounds;
+    const iconSpan = this.muteBtn.querySelector('.control-icon');
+    const textSpan = this.muteBtn.querySelector('.control-text');
+    
+    if (iconSpan) {
+      iconSpan.innerHTML = isMuted 
+        ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>'
+        : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    }
+    if (textSpan) {
+      textSpan.textContent = isMuted ? 'Unmute' : 'Mute';
+    }
+    this.muteBtn.setAttribute('aria-label', isMuted ? 'Unmute Sounds' : 'Mute Sounds');
   }
 
   private updateDisplay() {
@@ -1643,6 +1995,16 @@ kanban-plugin: board
         font-weight: 600;
       }
       
+      .calendar-day.selected {
+        outline: 2px solid var(--interactive-accent);
+        outline-offset: -2px;
+      }
+      
+      .calendar-day.today.selected {
+        outline: 2px solid var(--text-on-accent);
+        outline-offset: -2px;
+      }
+      
       .calendar-day.empty {
         cursor: default;
       }
@@ -1874,20 +2236,69 @@ kanban-plugin: board
       .trim();
   }
 
+  private isTodoColumn(columnTitle: string): boolean {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    
+    // Check user-defined mapping first
+    if (mainColumns?.todo) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.todo);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
+    
+    // Fallback to default detection
+    const normalized = this.normalizeColumnTitle(columnTitle);
+    return normalized.includes('to do') ||
+           normalized.includes('todo') ||
+           normalized.includes('backlog') ||
+           normalized.includes('📋') ||
+           normalized === 'to-do';
+  }
+
   private isProgressColumn(columnTitle: string): boolean {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    
+    // Check user-defined mapping first
+    if (mainColumns?.progress) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.progress);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
+    
+    // Fallback to default detection
     const normalized = this.normalizeColumnTitle(columnTitle);
     return normalized.includes('in progress') ||
            normalized.includes('phase progress') ||
            normalized.includes('current tasks') ||
            normalized.includes('phase completion') ||
+           normalized.includes('🚧') ||
            normalized === 'doing' ||
            normalized === 'progress';
   }
 
   private isDoneColumn(columnTitle: string): boolean {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    
+    // Check user-defined mapping first
+    if (mainColumns?.done) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.done);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
+    
+    // Fallback to default detection
     const normalized = this.normalizeColumnTitle(columnTitle);
-    return normalized.includes('done') ||  // This catches "Done - Phase 1 (Code)" 
-           normalized.includes('✅') ||    // Catches any column with checkmark emoji
+    return normalized.includes('done') ||
+           normalized.includes('✅') ||
            normalized.includes('completed') ||
            normalized.includes('finished') ||
            normalized === 'complete';
@@ -2101,103 +2512,98 @@ kanban-plugin: board
   
   private async updateTaskInKanbanFile(taskId: string, timeString: string) {
     // Only update if feature is enabled
-    if (!this.plugin.settings.updateTaskTimerInFile) return;
+    if (!this.plugin.settings.updateTaskTimerInFile) {
+      console.log('[KANBAN UPDATE] Skipped: feature disabled');
+      return;
+    }
 
     // Only update while the work timer is actively running
     // This prevents selection/board switches (when timer is stopped) from spamming file writes
     if (!this.plugin.isRunning || this.plugin.currentMode !== 'work') {
+      console.log('[KANBAN UPDATE] Skipped: timer not running or not work mode');
       return;
     }
     
     // Don't update if timer is 0:00 (no time tracked)
     if (!timeString || timeString === '0:00') {
+      console.log('[KANBAN UPDATE] Skipped: timer is 0:00');
       return;
     }
     
     // Check if the timer value has actually changed
     const lastValue = this.lastUpdateTimerValue.get(taskId);
     if (lastValue === timeString) {
+      console.log('[KANBAN UPDATE] Skipped: value unchanged');
       return; // No change, don't update
     }
     
     // Debounce to avoid too frequent file updates
     const now = Date.now();
     if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
+      console.log('[KANBAN UPDATE] Skipped: debounce (', now - this.lastKanbanUpdateTime, 'ms since last)');
       return;
     }
     
+    console.log('[KANBAN UPDATE] Attempting update for task:', taskId, 'time:', timeString);
+    
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
-      if (!boardPath) return;
-      
-      const file = this.app.vault.getAbstractFileByPath(boardPath);
-      if (!(file instanceof TFile)) return;
-      
-      // Get the task element to find its original text
-      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
-      if (!taskElement) return;
-      
-      // Don't update completed tasks
-      if (taskElement.classList.contains('task-completed')) {
-        console.log('[KANBAN UPDATE] Skipping completed task:', taskId);
+      if (!boardPath) {
+        console.log('[KANBAN UPDATE] Failed: no boardPath');
         return;
       }
       
-      const taskTextElement = taskElement.querySelector('.task-text');
-      if (!taskTextElement) return;
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) {
+        console.log('[KANBAN UPDATE] Failed: file not found at', boardPath);
+        return;
+      }
       
-      // Get the original task text (without any timer info)
-      let originalText = taskTextElement.textContent || '';
+      // Get task text from current element
+      const taskText = this.currentTaskElement?.querySelector('.task-text')?.textContent;
+      if (!taskText) {
+        console.log('[KANBAN UPDATE] Failed: no task text found');
+        return;
+      }
       
-      // Remove ALL timer-like patterns (with or without emoji)
-      originalText = originalText
-        .replace(/ - 🍎 \d+:\d{2}/g, '')  // Pattern with apple emoji
-        .replace(/ - \d+:\d{2}/g, '')      // Pattern without emoji (like "- 1:01")
-        .replace(/ \[\d+:\d{2}\]/g, '')    // Square bracket pattern
-        .trim();
-      
+      // Read current file content
       const content = await this.app.vault.read(file);
-      const lines = content.split('\n');
       
+      // Find and update the task line
+      const lines = content.split('\n');
       let updated = false;
+      
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        
-        // Check if this line contains the task (without timer info)
-        if ((line.includes('- [ ]') || line.includes('- [x]')) && line.includes(originalText)) {
-          // Remove old timer info from the line (all patterns including without emoji)
-          let cleanLine = line
-            .replace(/ - 🍎 \d+:\d{2}/g, '')  // Pattern with apple emoji
-            .replace(/ - \d+:\d{2}/g, '')      // Pattern without emoji
-            .replace(/ \[\d+:\d{2}\]/g, '');   // Square bracket pattern
+        // Match task line: - [ ] taskText or - [x] taskText, with optional timer
+        const taskMatch = line.match(/^(- \[[ x]\] )(.+?)( - (?:🍎 )?\d+:\d{2})?$/);
+        if (taskMatch) {
+          const prefix = taskMatch[1]; // "- [ ] " or "- [x] "
+          let lineTaskText = taskMatch[2].trim();
           
-          // Add new timer info
-          if (timeString && timeString !== '0:00') {
-            // Insert timer info before any tags (which start with #)
-            const tagIndex = cleanLine.search(/#\w+/);
-            if (tagIndex !== -1) {
-              // Has tags - insert timer before them
-              lines[i] = cleanLine.substring(0, tagIndex).trimEnd() + ` - 🍎 ${timeString} ` + cleanLine.substring(tagIndex);
-            } else {
-              // No tags - append timer to end
-              lines[i] = cleanLine.trimEnd() + ` - 🍎 ${timeString}`;
-            }
-          } else {
-            lines[i] = cleanLine;
+          // Remove existing timer from line task text for comparison
+          lineTaskText = lineTaskText.replace(/ - (?:🍎 )?\d+:\d{2}$/, '').trim();
+          
+          if (lineTaskText === taskText) {
+            // Update this line with new timer
+            lines[i] = `${prefix}${taskText} - 🍎 ${timeString}`;
+            updated = true;
+            console.log('[KANBAN UPDATE] Updated line:', lines[i]);
+            break;
           }
-          
-          updated = true;
-          console.log('[KANBAN UPDATE] Updated line:', lines[i]);
-          break;
         }
       }
       
       if (updated) {
+        // Write updated content back to file
         await this.app.vault.modify(file, lines.join('\n'));
-        this.lastKanbanUpdateTime = now;
-        this.lastUpdateTimerValue.set(taskId, timeString); // Remember this value
-        console.log('[KANBAN UPDATE] Task timer updated in file:', originalText, '→', timeString);
+        this.lastKanbanUpdateTime = Date.now();
+        this.lastUpdateTimerValue.set(taskId, timeString);
+        console.log('[KANBAN UPDATE] Successfully wrote to file');
+      } else {
+        console.log('[KANBAN UPDATE] Task not found in file:', taskText);
       }
+      
     } catch (error) {
       console.error('[KANBAN UPDATE] Error updating task in file:', error);
     }
@@ -2532,7 +2938,14 @@ kanban-plugin: board
       console.warn('[KANBAN LOAD] Kanban selector not initialized');
       return;
     }
-  
+    
+    // Prevent concurrent calls that could leave dropdown empty
+    if (this.isLoadingKanbanBoards) {
+      console.log('[KANBAN LOAD] Already loading, skipping duplicate call');
+      return;
+    }
+    
+    this.isLoadingKanbanBoards = true;
     console.log('[KANBAN LOAD] Loading Kanban boards...');
     
     // Clear existing options except the default one
@@ -2641,6 +3054,9 @@ kanban-plugin: board
       }
     } catch (error) {
       console.error('Error loading Kanban boards:', error);
+    } finally {
+      // Always reset the loading flag
+      this.isLoadingKanbanBoards = false;
     }
   }
 
@@ -2651,8 +3067,14 @@ kanban-plugin: board
     }
 
     try {
+      // Preserve scroll position before clearing
+      const savedScrollLeft = this.tasksContainer.scrollLeft;
+      
       // Clear existing tasks
       this.tasksContainer.empty();
+      
+      // Restore scroll position immediately after clearing to prevent flash to start
+      this.tasksContainer.scrollLeft = savedScrollLeft;
 
       // Validate board path
       if (!boardPath || boardPath.trim() === '') {
@@ -2882,16 +3304,51 @@ kanban-plugin: board
         return;
       }
 
-      // Sort columns: use original order from allColumnNames if available, otherwise alphabetical
+      // Sort columns: use user's configured order if available, then file order, then alphabetical
       let sortedColumns: string[];
-      if (allColumnNames.length > 0) {
+      const userColumnOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath];
+      const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+      
+      console.log('[SIDEBAR COLUMNS] Board path:', boardPath);
+      console.log('[SIDEBAR COLUMNS] User column order:', userColumnOrder);
+      console.log('[SIDEBAR COLUMNS] Main columns mapping:', mainColumns);
+      console.log('[SIDEBAR COLUMNS] File columns:', allColumnNames);
+      
+      if (userColumnOrder && userColumnOrder.length > 0) {
+        console.log('[SIDEBAR COLUMNS] Using user column order');
+        // Use user's configured order - only show columns that are in the active list
+        // First add columns from user order that exist in the file
+        sortedColumns = userColumnOrder.filter(col => 
+          allColumnNames.some(fileCol => 
+            this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(col) ||
+            fileCol.includes(col) || col.includes(fileCol)
+          )
+        );
+        console.log('[SIDEBAR COLUMNS] After filter:', sortedColumns);
+        
+        // Map user column names to actual file column names
+        sortedColumns = sortedColumns.map(userCol => {
+          const matchingFileCol = allColumnNames.find(fileCol =>
+            this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(userCol) ||
+            fileCol.includes(userCol) || userCol.includes(fileCol)
+          );
+          return matchingFileCol || userCol;
+        });
+        console.log('[SIDEBAR COLUMNS] After mapping:', sortedColumns);
+        
+        // NOTE: We do NOT add back file columns that aren't in user order
+        // This respects the user's explicit decision to exclude certain columns
+        console.log('[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):', sortedColumns);
+      } else if (allColumnNames.length > 0) {
+        console.log('[SIDEBAR COLUMNS] Using file order (no user config)');
         // Use original order from file
         sortedColumns = allColumnNames;
       } else {
+        console.log('[SIDEBAR COLUMNS] Using fallback sorting');
         // Fallback: sort with incomplete first, then completed
         sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
-          const aCompleted = a.toLowerCase().includes('done') || a.toLowerCase().includes('complete');
-          const bCompleted = b.toLowerCase().includes('done') || b.toLowerCase().includes('complete');
+          const aCompleted = this.isDoneColumn(a);
+          const bCompleted = this.isDoneColumn(b);
           if (aCompleted && !bCompleted) return 1;
           if (!aCompleted && bCompleted) return -1;
           return 0;
@@ -2916,6 +3373,39 @@ kanban-plugin: board
           text: `${columnName} (${columnTasks.length})`,
           cls: 'column-title'
         });
+        
+        // Add quick add input for this column (skip Done columns)
+        if (!this.isDoneColumn(columnName)) {
+          const quickAddContainer = taskGroup.createEl('div', { cls: 'quick-add-container' });
+          quickAddContainer.style.padding = '4px 8px';
+          quickAddContainer.style.display = 'flex';
+          quickAddContainer.style.gap = '4px';
+          
+          const quickAddInput = quickAddContainer.createEl('input', {
+            cls: 'quick-add-input',
+            attr: { 
+              placeholder: '+ Add task...',
+              type: 'text'
+            }
+          });
+          quickAddInput.style.flex = '1';
+          quickAddInput.style.padding = '4px 8px';
+          quickAddInput.style.fontSize = '0.85em';
+          quickAddInput.style.border = '1px solid var(--background-modifier-border)';
+          quickAddInput.style.borderRadius = '4px';
+          quickAddInput.style.background = 'var(--background-primary)';
+          
+          // Handle Enter key to add task - STOP propagation to prevent keyboard nav conflicts
+          quickAddInput.addEventListener('keydown', async (e) => {
+            e.stopPropagation(); // Prevent keyboard navigation from capturing these events
+            if (e.key === 'Enter' && quickAddInput.value.trim()) {
+              e.preventDefault();
+              const taskText = quickAddInput.value.trim();
+              await this.addTaskToColumn(taskText, columnName, boardPath);
+              quickAddInput.value = '';
+            }
+          });
+        }
 
         // Create task list for this column inside the group
         const taskList = taskGroup.createEl('ul', { cls: 'pomodoro-task-list' });
@@ -2975,11 +3465,19 @@ kanban-plugin: board
         
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
+          
+          // Detect priority from task text
+          const priority = this.detectTaskPriority(task.text);
+          
           const taskItem = taskList.createEl('li', { 
-            cls: `pomodoro-task-item ${task.completed ? 'task-completed' : ''}`
+            cls: `pomodoro-task-item ${task.completed ? 'task-completed' : ''} priority-${priority}`
           });
           taskItem.setAttribute('data-task-id', taskId);
           taskItem.setAttribute('data-column', task.column);
+          taskItem.setAttribute('data-priority', priority);
+          
+          // Add priority indicator styling
+          this.applyPriorityStyle(taskItem, priority);
           
           // Create task content with timer
           const taskContent = taskItem.createDiv({ cls: 'task-content' });
@@ -3050,12 +3548,10 @@ kanban-plugin: board
                     if (moved) {
                       new Notice(`Task moved to "${doneTitle}"`);
                       
-                      // Scroll to Done column after move
+                      // After task is moved to Done, auto-select next incomplete task in the ORIGINAL column
+                      // Don't scroll to Done column - stay in current view
                       setTimeout(() => {
-                        const updatedDoneColumns = this.findColumnsByType('done');
-                        if (updatedDoneColumns.length > 0) {
-                          this.scrollToColumn(updatedDoneColumns[0].element);
-                        }
+                        this.selectNextIncompleteTaskInColumn(currentColumnTitle);
                       }, 400);
                     }
                   }
@@ -3152,6 +3648,11 @@ kanban-plugin: board
             this.selectTask(taskId, taskItem, taskTimer);
           });
           
+          // Add right-click context menu
+          taskItem.addEventListener('contextmenu', (e) => {
+            this.showTaskContextMenu(e, taskId, taskItem, task);
+          });
+          
           // Add drag & drop support
           taskItem.draggable = true;
           taskItem.addEventListener('dragstart', (e) => {
@@ -3164,12 +3665,29 @@ kanban-plugin: board
             taskItem.classList.remove('dragging');
           });
           
-          // Restore last active task
-          if (this.plugin.settings.currentTask === taskId) {
+          // Restore last active task (skip if already active to prevent duplicate selections)
+          if (this.plugin.settings.currentTask === taskId && this.activeTaskId !== taskId) {
             this.selectTask(taskId, taskItem, taskTimer);
+          } else if (this.plugin.settings.currentTask === taskId && this.activeTaskId === taskId) {
+            // Task is already active, just update UI without calling selectTask
+            taskItem.classList.add('pomodoro-task-active');
+            this.currentTaskElement = taskItem;
           }
         } // End of tasks loop
       } // End of columns loop
+      
+      // Update quick scroll buttons with column names
+      this.updateQuickScrollButtons(sortedColumns);
+      
+      // Setup keyboard navigation
+      this.setupKeyboardNavigation();
+      
+      // Restore scroll position after rendering (use requestAnimationFrame to ensure DOM is updated)
+      requestAnimationFrame(() => {
+        if (this.tasksContainer && savedScrollLeft > 0) {
+          this.tasksContainer.scrollLeft = savedScrollLeft;
+        }
+      });
       
       // Add a refresh hint if no tasks found
       if (tasks.length === 0) {
@@ -3199,7 +3717,96 @@ kanban-plugin: board
     }
   }
 
+  // Debounce for selectTask to prevent rapid duplicate selections
+  private lastSelectTime = 0;
+  private lastSelectedTaskId = '';
+  
+  /**
+   * Strip the count suffix (N) from a column title for matching.
+   * E.g., "In Progress (2)" -> "In Progress"
+   */
+  private stripColumnCount(title: string): string {
+    return title.replace(/\s*\(\d+\)\s*$/, '').trim();
+  }
+  
+  /**
+   * Select the next incomplete task in a specific column.
+   * If no incomplete tasks remain in the progress column, pause the timer.
+   * Does NOT scroll to earlier columns - only looks in progress-type columns.
+   */
+  private selectNextIncompleteTaskInColumn(columnTitle: string) {
+    if (!this.tasksContainer) return;
+    
+    // Strip the count from the search title for matching
+    const searchTitle = this.stripColumnCount(columnTitle);
+    console.log('[AUTO-SELECT] Looking for column (base name):', searchTitle);
+    
+    // Find all task groups
+    const groups = Array.from(this.tasksContainer.querySelectorAll('.pomodoro-task-group'));
+    let targetGroup: Element | null = null;
+    
+    // Find the group matching the column title (ignoring count suffix)
+    for (const group of groups) {
+      const title = group.querySelector('.pomodoro-column-header .column-title')?.textContent || '';
+      const baseTitle = this.stripColumnCount(title);
+      if (baseTitle === searchTitle) {
+        targetGroup = group;
+        console.log('[AUTO-SELECT] Found matching column:', title);
+        break;
+      }
+    }
+    
+    if (!targetGroup) {
+      console.log('[AUTO-SELECT] Column not found:', searchTitle);
+      this.pauseTimerIfNoActiveTasks();
+      return;
+    }
+    
+    // Find all incomplete tasks in this column
+    const incompleteTasks = targetGroup.querySelectorAll('.pomodoro-task-item:not(.task-completed)');
+    
+    if (incompleteTasks.length === 0) {
+      console.log('[AUTO-SELECT] No incomplete tasks in column:', searchTitle);
+      this.pauseTimerIfNoActiveTasks();
+      return;
+    }
+    
+    // Select the first incomplete task
+    const nextTask = incompleteTasks[0] as HTMLElement;
+    const taskId = nextTask.getAttribute('data-task-id');
+    const timerElement = nextTask.querySelector('.task-timer') as HTMLElement;
+    
+    if (taskId && timerElement) {
+      console.log('[AUTO-SELECT] Selecting next incomplete task in column:', searchTitle);
+      this.selectTask(taskId, nextTask, timerElement);
+      
+      // Scroll to the progress column to keep it in view (not to Done)
+      this.scrollToColumn(targetGroup as HTMLElement);
+    } else {
+      this.pauseTimerIfNoActiveTasks();
+    }
+  }
+  
+  /**
+   * Pause the timer if there are no active tasks.
+   */
+  private pauseTimerIfNoActiveTasks() {
+    if (!this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === 'work') {
+      console.log('[AUTO-SELECT] No active task, pausing timer');
+      this.plugin.togglePause();
+      new Notice('No more tasks - timer paused');
+    }
+  }
+  
   private async selectTask(taskId: string, taskElement: HTMLElement, timerElement: HTMLElement) {
+    // Debounce: Skip if same task selected within 100ms
+    const now = Date.now();
+    if (taskId === this.lastSelectedTaskId && now - this.lastSelectTime < 100) {
+      return; // Skip duplicate rapid selection
+    }
+    this.lastSelectTime = now;
+    this.lastSelectedTaskId = taskId;
+    
     // Always hide any existing warning as soon as a task is clicked
     if (this.warningElement) {
       this.warningElement.style.display = 'none';
@@ -3326,9 +3933,10 @@ kanban-plugin: board
       const prevKanbanPath = prevTaskParts ? prevTaskParts[1] : '';
       const prevKanbanFileName = prevKanbanPath.split('/').pop()?.replace('.md', '') || 'Unknown';
       
-      // Log to task timer file with the correct kanban file name
-      await this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName);
-      console.log('  Task time logged for board:', prevKanbanFileName);
+      // Log to task timer file (non-blocking to avoid delay when switching tasks)
+      this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName).then(() => {
+        console.log('  Task time logged for board:', prevKanbanFileName);
+      });
     }
     
     // Update UI - remove active class from all tasks
@@ -3354,14 +3962,18 @@ kanban-plugin: board
     this.activeTaskId = taskId;
     this.lastUpdateTime = Date.now();
     
+    // Update active task display (TaskNotes-style)
+    this.activeTaskText = taskText;
+    this.updateActiveTaskDisplay(taskText);
+    
     // Log current task timer state
     const existingTime = this.taskTimers.get(taskId) || 0;
     console.log('  New Task Existing Time:', Math.floor(existingTime / 60) + ':' + String(Math.floor(existingTime % 60)).padStart(2, '0'));
     console.log('═══════════════════════════════════════════════════════');
     
-    // Save current task to settings
+    // Save current task to settings (non-blocking)
     this.plugin.settings.currentTask = taskId;
-    await this.plugin.saveSettings();
+    this.plugin.saveSettings(); // Don't await - let it save in background
     
     // Update display immediately
     this.updateTaskTimer(timerElement);
@@ -3548,5 +4160,515 @@ kanban-plugin: board
         ? `Quick ${this.plugin.settings.quickBreakDuration} min break`
         : 'Quick break disabled');
     }
+  }
+  
+  // Update active task display under timer (TaskNotes-style)
+  private updateActiveTaskDisplay(taskText: string) {
+    if (!this.activeTaskDisplay) return;
+    
+    if (taskText) {
+      // Truncate long task names
+      const displayText = taskText.length > 40 ? taskText.substring(0, 37) + '...' : taskText;
+      this.activeTaskDisplay.innerHTML = `<span style="color: var(--text-accent);">🎯</span> ${displayText}`;
+      this.activeTaskDisplay.style.color = 'var(--text-normal)';
+    } else {
+      this.activeTaskDisplay.innerHTML = '<span style="opacity: 0.6">No task selected</span>';
+      this.activeTaskDisplay.style.color = 'var(--text-muted)';
+    }
+  }
+  
+  // Clear active task display
+  public clearActiveTaskDisplay() {
+    this.activeTaskText = '';
+    this.updateActiveTaskDisplay('');
+  }
+  
+  // Update schedule display in sidebar
+  private updateScheduleDisplay(container: HTMLElement) {
+    if (!container) return;
+    container.empty();
+    
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    
+    // Use board-specific schedule if available, otherwise use global schedule
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      // Show custom board schedule
+      container.createSpan({ text: '📋 Board:', cls: 'schedule-label' });
+      boardSchedule.phases.forEach((phase, i) => {
+        const icon = phase.type === 'Work' ? '🍅' : (phase.type === 'Short Break' ? '☕' : '🌴');
+        const chip = container.createSpan({ cls: 'schedule-chip-mini' });
+        chip.innerHTML = `${icon}${phase.duration}m`;
+        chip.style.background = 'var(--background-modifier-border)';
+        chip.style.padding = '2px 6px';
+        chip.style.borderRadius = '10px';
+        chip.style.fontSize = '0.85em';
+      });
+    } else {
+      // Show global schedule
+      const work = currentSchedule.workDuration || 25;
+      const shortBreak = currentSchedule.shortBreakDuration || 5;
+      const longBreak = currentSchedule.longBreakDuration || 15;
+      
+      container.innerHTML = `<span style="opacity:0.7">🍅${work}m</span> <span style="opacity:0.7">☕${shortBreak}m</span> <span style="opacity:0.7">🌴${longBreak}m</span>`;
+    }
+  }
+  
+  // Public method to refresh view when settings change
+  public async refreshView() {
+    console.log('[REFRESH] Refreshing sidebar view after settings change');
+    
+    // Update schedule display
+    const scheduleDisplay = this.container?.querySelector('.schedule-display') as HTMLElement;
+    if (scheduleDisplay) {
+      this.updateScheduleDisplay(scheduleDisplay);
+    }
+    
+    // Reload Kanban tasks if a board is selected
+    if (this.plugin.settings.kanbanBoardPath) {
+      await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+    }
+  }
+  
+  // Update quick scroll buttons based on loaded columns
+  private updateQuickScrollButtons(columns: string[]) {
+    if (!this.quickScrollContainer) return;
+    
+    // Clear existing buttons
+    this.quickScrollContainer.empty();
+    this.columnButtons.clear();
+    
+    if (columns.length === 0) {
+      this.quickScrollContainer.style.display = 'none';
+      return;
+    }
+    
+    this.quickScrollContainer.style.display = 'flex';
+    
+    // Create a button for each column
+    for (const columnName of columns) {
+      const btn = this.quickScrollContainer.createEl('button', {
+        cls: 'quick-scroll-btn',
+        text: this.getColumnIcon(columnName) + ' ' + this.getShortColumnName(columnName)
+      });
+      btn.style.flex = '1';
+      btn.style.padding = '4px 8px';
+      btn.style.fontSize = '0.8em';
+      btn.style.border = '1px solid var(--background-modifier-border)';
+      btn.style.borderRadius = '4px';
+      btn.style.background = 'var(--background-secondary)';
+      btn.style.cursor = 'pointer';
+      btn.style.transition = 'all 0.2s ease';
+      
+      // Hover effect
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = 'var(--background-modifier-hover)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'var(--background-secondary)';
+      });
+      
+      // Click handler - scroll to column
+      btn.addEventListener('click', () => {
+        this.scrollToColumnByName(columnName);
+      });
+      
+      this.columnButtons.set(columnName, btn);
+    }
+  }
+  
+  // Get icon for column based on name
+  private getColumnIcon(columnName: string): string {
+    const lower = columnName.toLowerCase();
+    if (lower.includes('todo') || lower.includes('to do') || lower.includes('backlog')) return '📋';
+    if (lower.includes('progress') || lower.includes('doing') || lower.includes('active')) return '🚧';
+    if (lower.includes('done') || lower.includes('complete') || lower.includes('finished')) return '✅';
+    return '📌';
+  }
+  
+  // Get short name for column button
+  private getShortColumnName(columnName: string): string {
+    // Remove emoji and count suffix like "(3)"
+    let name = columnName
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+      .replace(/\(\d+\)/g, '')
+      .trim();
+    
+    // Shorten common names
+    if (name.toLowerCase().includes('in progress')) return 'Progress';
+    if (name.toLowerCase().includes('to do')) return 'Todo';
+    if (name.length > 10) return name.substring(0, 8) + '..';
+    return name;
+  }
+  
+  // Scroll to column by name
+  private scrollToColumnByName(columnName: string) {
+    if (!this.tasksContainer) return;
+    
+    const groups = Array.from(this.tasksContainer.querySelectorAll('.pomodoro-task-group'));
+    for (const group of groups) {
+      const titleEl = group.querySelector('.column-title');
+      if (titleEl && titleEl.textContent?.includes(columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim())) {
+        group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Brief highlight effect
+        (group as HTMLElement).style.transition = 'background 0.3s ease';
+        (group as HTMLElement).style.background = 'var(--background-modifier-hover)';
+        setTimeout(() => {
+          (group as HTMLElement).style.background = '';
+        }, 500);
+        break;
+      }
+    }
+  }
+  
+  // Show context menu for task (right-click menu)
+  private showTaskContextMenu(e: MouseEvent, taskId: string, taskElement: HTMLElement, task: {text: string, column: string, completed: boolean}) {
+    e.preventDefault();
+    
+    const menu = new Menu();
+    
+    // Timer actions
+    if (!task.completed) {
+      menu.addItem((item) => {
+        item.setTitle('▶️ Start Timer')
+          .setIcon('play')
+          .onClick(() => {
+            const timerEl = taskElement.querySelector('.task-timer') as HTMLElement;
+            if (timerEl) {
+              this.selectTask(taskId, taskElement, timerEl);
+              // Start the timer if not running
+              if (!this.plugin.isRunning) {
+                this.plugin.startTimer();
+              }
+            }
+          });
+      });
+    }
+    
+    // Move to column submenu
+    menu.addItem((item) => {
+      item.setTitle('📦 Move to...')
+        .setIcon('arrow-right')
+        .onClick(() => {
+          // Show column selection menu
+          this.showMoveToColumnMenu(e, taskId, task.column);
+        });
+    });
+    
+    menu.addSeparator();
+    
+    // Toggle completion
+    menu.addItem((item) => {
+      item.setTitle(task.completed ? '↩️ Mark as Incomplete' : '✅ Mark as Complete')
+        .setIcon(task.completed ? 'rotate-ccw' : 'check')
+        .onClick(() => {
+          const checkbox = taskElement.querySelector('.task-checkbox') as HTMLInputElement;
+          if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event('change'));
+          }
+        });
+    });
+    
+    menu.addSeparator();
+    
+    // Open in editor
+    menu.addItem((item) => {
+      item.setTitle('📝 Open Kanban File')
+        .setIcon('file-text')
+        .onClick(async () => {
+          const boardPath = this.plugin.settings.kanbanBoardPath;
+          if (boardPath) {
+            const file = this.app.vault.getAbstractFileByPath(boardPath);
+            if (file instanceof TFile) {
+              await this.app.workspace.getLeaf().openFile(file);
+            }
+          }
+        });
+    });
+    
+    menu.showAtMouseEvent(e);
+  }
+  
+  // Flag to prevent duplicate keyboard navigation setup
+  private keyboardNavInitialized = false;
+  
+  // Setup keyboard navigation for tasks
+  private setupKeyboardNavigation() {
+    if (!this.tasksContainer) return;
+    
+    // Prevent duplicate setup - only initialize once
+    if (this.keyboardNavInitialized) return;
+    this.keyboardNavInitialized = true;
+    
+    // Make container focusable
+    this.tasksContainer.setAttribute('tabindex', '0');
+    
+    this.tasksContainer.addEventListener('keydown', (e) => {
+      // CRITICAL: Ignore events from input fields to avoid conflicts with quick-add
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return; // Let input handle its own events
+      }
+      
+      const tasks = Array.from(this.tasksContainer!.querySelectorAll('.pomodoro-task-item:not(.task-completed)'));
+      if (tasks.length === 0) return;
+      
+      // Find currently focused/active task
+      let currentIndex = tasks.findIndex(t => t.classList.contains('pomodoro-task-active'));
+      if (currentIndex === -1) currentIndex = 0;
+      
+      switch (e.key) {
+        case 'ArrowDown':
+        case 'j': // Vim-style
+          e.preventDefault();
+          if (currentIndex < tasks.length - 1) {
+            this.focusTaskByIndex(tasks, currentIndex + 1);
+          }
+          break;
+          
+        case 'ArrowUp':
+        case 'k': // Vim-style
+          e.preventDefault();
+          if (currentIndex > 0) {
+            this.focusTaskByIndex(tasks, currentIndex - 1);
+          }
+          break;
+          
+        case 'Enter':
+          e.preventDefault();
+          // Start timer on selected task
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex] as HTMLElement;
+            const timerEl = taskEl.querySelector('.task-timer') as HTMLElement;
+            const taskId = taskEl.getAttribute('data-task-id') || '';
+            if (timerEl) {
+              this.selectTask(taskId, taskEl, timerEl);
+              if (!this.plugin.isRunning) {
+                this.plugin.startTimer();
+              }
+            }
+          }
+          break;
+          
+        case ' ': // Space
+          e.preventDefault();
+          // Toggle completion on selected task
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex] as HTMLElement;
+            const checkbox = taskEl.querySelector('.task-checkbox') as HTMLInputElement;
+            if (checkbox) {
+              checkbox.checked = !checkbox.checked;
+              checkbox.dispatchEvent(new Event('change'));
+            }
+          }
+          break;
+          
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          // Move to next column
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex] as HTMLElement;
+            const taskId = taskEl.getAttribute('data-task-id') || '';
+            const currentColumn = taskEl.getAttribute('data-column') || '';
+            this.moveTaskToNextColumn(taskId, currentColumn);
+          }
+          break;
+      }
+    });
+  }
+  
+  // Focus task by index
+  private focusTaskByIndex(tasks: Element[], index: number) {
+    // Remove active from all
+    tasks.forEach(t => t.classList.remove('keyboard-focus'));
+    
+    // Add focus to target
+    const targetTask = tasks[index] as HTMLElement;
+    if (targetTask) {
+      targetTask.classList.add('keyboard-focus');
+      targetTask.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      
+      // Also select it
+      const timerEl = targetTask.querySelector('.task-timer') as HTMLElement;
+      const taskId = targetTask.getAttribute('data-task-id') || '';
+      if (timerEl) {
+        this.selectTask(taskId, targetTask, timerEl);
+      }
+    }
+  }
+  
+  // Detect task priority from text
+  private detectTaskPriority(taskText: string): 'high' | 'medium' | 'low' | 'none' {
+    const text = taskText.toLowerCase();
+    
+    // Check for explicit priority markers
+    if (text.includes('!!!') || text.includes('#high') || text.includes('🔴') || 
+        text.includes('priority: high') || text.includes('p1')) {
+      return 'high';
+    }
+    if (text.includes('!!') || text.includes('#medium') || text.includes('🟡') || 
+        text.includes('priority: medium') || text.includes('p2')) {
+      return 'medium';
+    }
+    if (text.includes('!') || text.includes('#low') || text.includes('🟢') || 
+        text.includes('priority: low') || text.includes('p3')) {
+      return 'low';
+    }
+    
+    // Check for urgency keywords
+    if (text.includes('urgent') || text.includes('critical') || text.includes('asap') || 
+        text.includes('important') || text.includes('blocker')) {
+      return 'high';
+    }
+    
+    return 'none';
+  }
+  
+  // Apply priority styling to task item
+  private applyPriorityStyle(taskItem: HTMLElement, priority: 'high' | 'medium' | 'low' | 'none') {
+    // Add left border color based on priority
+    switch (priority) {
+      case 'high':
+        taskItem.style.borderLeft = '3px solid #e74c3c'; // Red
+        taskItem.style.background = 'rgba(231, 76, 60, 0.05)';
+        break;
+      case 'medium':
+        taskItem.style.borderLeft = '3px solid #f39c12'; // Orange/Yellow
+        taskItem.style.background = 'rgba(243, 156, 18, 0.05)';
+        break;
+      case 'low':
+        taskItem.style.borderLeft = '3px solid #27ae60'; // Green
+        taskItem.style.background = 'rgba(39, 174, 96, 0.05)';
+        break;
+      default:
+        // No special styling for no priority
+        break;
+    }
+  }
+  
+  // Move task to next column in sequence (Todo -> In Progress -> Done)
+  private async moveTaskToNextColumn(taskId: string, currentColumn: string) {
+    const todoColumns = this.findColumnsByType('progress').filter(c => 
+      c.title.toLowerCase().includes('todo') || c.title.toLowerCase().includes('to do')
+    );
+    const progressColumns = this.findColumnsByType('progress').filter(c => 
+      c.title.toLowerCase().includes('progress') || c.title.toLowerCase().includes('doing')
+    );
+    const doneColumns = this.findColumnsByType('done');
+    
+    // Determine current column type and move to next
+    const currentLower = currentColumn.toLowerCase();
+    let targetColumn: { title: string, type: 'progress' | 'done' } | null = null;
+    
+    if (currentLower.includes('todo') || currentLower.includes('to do') || currentLower.includes('backlog')) {
+      // Move to In Progress
+      if (progressColumns.length > 0) {
+        targetColumn = { title: progressColumns[0].title, type: 'progress' };
+      }
+    } else if (currentLower.includes('progress') || currentLower.includes('doing')) {
+      // Move to Done
+      if (doneColumns.length > 0) {
+        targetColumn = { title: doneColumns[0].title, type: 'done' };
+      }
+    }
+    
+    if (targetColumn) {
+      await this.moveTaskToColumn(taskId, targetColumn.type, targetColumn.title);
+      new Notice(`Task moved to "${targetColumn.title}"`);
+    } else {
+      new Notice('No next column found');
+    }
+  }
+  
+  // Add a new task to a specific column in the Kanban file
+  private async addTaskToColumn(taskText: string, columnName: string, boardPath: string) {
+    try {
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof TFile)) {
+        new Notice('Kanban file not found');
+        return;
+      }
+      
+      const content = await this.app.vault.read(file);
+      const lines = content.split('\n');
+      
+      // Find the column header and insert after it
+      let insertIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Match column header (## Column Name or with emoji)
+        if (line.match(/^##\s+/) && line.toLowerCase().includes(columnName.toLowerCase().replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim())) {
+          // Find where to insert (after header, before next header or at end of section)
+          insertIndex = i + 1;
+          // Skip empty lines after header
+          while (insertIndex < lines.length && lines[insertIndex].trim() === '') {
+            insertIndex++;
+          }
+          break;
+        }
+      }
+      
+      if (insertIndex === -1) {
+        new Notice(`Column "${columnName}" not found in Kanban file`);
+        return;
+      }
+      
+      // Create the new task line
+      const newTaskLine = `- [ ] ${taskText}`;
+      
+      // Insert the task
+      lines.splice(insertIndex, 0, newTaskLine);
+      
+      // Write back to file
+      await this.app.vault.modify(file, lines.join('\n'));
+      
+      new Notice(`Task added to "${columnName}"`);
+      
+      // Reload tasks to show the new one
+      setTimeout(() => {
+        this.loadKanbanTasks(boardPath);
+      }, 200);
+      
+    } catch (error) {
+      console.error('Error adding task:', error);
+      new Notice('Failed to add task');
+    }
+  }
+  
+  // Show submenu for moving task to a column
+  private showMoveToColumnMenu(e: MouseEvent, taskId: string, currentColumn: string) {
+    const menu = new Menu();
+    
+    // Get all columns
+    const todoColumns = this.findColumnsByType('progress').filter(c => 
+      c.title.toLowerCase().includes('todo') || c.title.toLowerCase().includes('to do') || c.title.toLowerCase().includes('backlog')
+    );
+    const progressColumns = this.findColumnsByType('progress').filter(c => 
+      !c.title.toLowerCase().includes('todo') && !c.title.toLowerCase().includes('to do')
+    );
+    const doneColumns = this.findColumnsByType('done');
+    
+    // Add all columns as options
+    const allColumns = [...todoColumns, ...progressColumns, ...doneColumns];
+    
+    for (const col of allColumns) {
+      const isCurrent = col.title.includes(currentColumn) || currentColumn.includes(col.title);
+      menu.addItem((item) => {
+        item.setTitle((isCurrent ? '• ' : '') + col.title)
+          .setIcon(this.isDoneColumn(col.title) ? 'check-circle' : 'circle')
+          .setDisabled(isCurrent)
+          .onClick(async () => {
+            const columnType = this.isDoneColumn(col.title) ? 'done' : 'progress';
+            await this.moveTaskToColumn(taskId, columnType, col.title);
+            new Notice(`Task moved to "${col.title}"`);
+          });
+      });
+    }
+    
+    menu.showAtMouseEvent(e);
   }
 }

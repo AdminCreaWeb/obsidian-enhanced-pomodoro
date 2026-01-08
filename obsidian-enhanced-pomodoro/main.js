@@ -54,15 +54,25 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.quickBreakButton = null;
     // Container reference
     this.container = null;
+    // Selected calendar date (for sync button)
+    this.selectedCalendarDate = /* @__PURE__ */ new Date();
+    // Active task display reference
+    this.activeTaskDisplay = null;
+    this.activeTaskText = "";
+    // Quick scroll buttons container
+    this.quickScrollContainer = null;
+    this.columnButtons = /* @__PURE__ */ new Map();
     // Button references
     this.playBtn = null;
     this.settingsBtn = null;
     this.resetBtn = null;
     this.endCycleBtn = null;
+    this.muteBtn = null;
     this.kanbanSelector = null;
     this.refreshButton = null;
     this.openFileButton = null;
     this.warningElement = null;
+    this.isLoadingKanbanBoards = false;
     this.warningTimeout = null;
     this.isDragging = false;
     this.dragTarget = null;
@@ -70,6 +80,11 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.kanbanUpdateDebounceDelay = 5e3;
     // Update Kanban file every 5 seconds max
     this.lastUpdateTimerValue = /* @__PURE__ */ new Map();
+    // Debounce for selectTask to prevent rapid duplicate selections
+    this.lastSelectTime = 0;
+    this.lastSelectedTaskId = "";
+    // Flag to prevent duplicate keyboard navigation setup
+    this.keyboardNavInitialized = false;
     this.plugin = plugin;
   }
   async updateTaskCompletionState(taskId, completed) {
@@ -138,6 +153,25 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.svgElement.style.height = "auto";
     svgContainer.appendChild(this.svgElement);
     timerContainer.appendChild(svgContainer);
+    this.activeTaskDisplay = timerContainer.createDiv("active-task-display");
+    this.activeTaskDisplay.style.textAlign = "center";
+    this.activeTaskDisplay.style.padding = "0.5rem";
+    this.activeTaskDisplay.style.fontSize = "0.9em";
+    this.activeTaskDisplay.style.fontWeight = "500";
+    this.activeTaskDisplay.style.color = "var(--text-muted)";
+    this.activeTaskDisplay.style.borderTop = "1px solid var(--background-modifier-border)";
+    this.activeTaskDisplay.style.marginTop = "0.5rem";
+    this.activeTaskDisplay.innerHTML = '<span style="opacity: 0.6">No task selected</span>';
+    const scheduleDisplay = timerContainer.createDiv("schedule-display");
+    scheduleDisplay.style.textAlign = "center";
+    scheduleDisplay.style.padding = "0.25rem 0.5rem";
+    scheduleDisplay.style.fontSize = "0.75em";
+    scheduleDisplay.style.color = "var(--text-faint)";
+    scheduleDisplay.style.display = "flex";
+    scheduleDisplay.style.justifyContent = "center";
+    scheduleDisplay.style.gap = "8px";
+    scheduleDisplay.style.flexWrap = "wrap";
+    this.updateScheduleDisplay(scheduleDisplay);
     const controls = container.createDiv("pomodoro-controls");
     const sidebarContainer = container.createDiv("pomodoro-sidebar");
     sidebarContainer.style.flexGrow = "1";
@@ -185,6 +219,14 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     manualContent.style.right = "0";
     manualContent.style.bottom = "0";
     manualContent.style.overflow = "auto";
+    manualContent.style.display = "flex";
+    manualContent.style.flexDirection = "column";
+    this.quickScrollContainer = manualContent.createDiv("quick-scroll-buttons");
+    this.quickScrollContainer.style.display = "flex";
+    this.quickScrollContainer.style.gap = "4px";
+    this.quickScrollContainer.style.padding = "8px";
+    this.quickScrollContainer.style.borderBottom = "1px solid var(--background-modifier-border)";
+    this.quickScrollContainer.style.flexShrink = "0";
     this.tasksContainer = manualContent.createDiv("pomodoro-tasks");
     this.tasksContainer.style.flexGrow = "1";
     this.tasksContainer.style.overflowY = "auto";
@@ -200,13 +242,6 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     this.animate();
     setTimeout(async () => {
       await this.loadKanbanBoards();
-      if (this.plugin.settings.kanbanBoardPath) {
-        try {
-          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-        } catch (error) {
-          console.error("Failed loading Kanban tasks:", error);
-        }
-      }
     }, 500);
   }
   // Button style management
@@ -359,6 +394,10 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     miniCalendarContent.empty();
     const miniCalendar = miniCalendarContent.createDiv("mini-calendar");
     this.createMiniCalendar(miniCalendar);
+    const syncSection = miniCalendarContent.createDiv("sync-section");
+    syncSection.style.marginTop = "10px";
+    syncSection.style.marginBottom = "10px";
+    this.createSyncButton(syncSection);
   }
   loadCalendarTasksView() {
     const calendarTasksContent = this.container?.querySelector('.sidebar-content[data-content="calendar-tasks"]');
@@ -463,10 +502,210 @@ kanban-plugin: board
     calendarContent.empty();
     const miniCalendar = calendarContent.createDiv("mini-calendar");
     this.createMiniCalendar(miniCalendar);
+    const syncSection = calendarContent.createDiv("sync-section");
+    syncSection.style.marginTop = "10px";
+    syncSection.style.marginBottom = "10px";
+    this.createSyncButton(syncSection);
     const todayTasks = calendarContent.createDiv("today-tasks");
     todayTasks.createEl("h3", { text: "Today" });
     const tasksList = todayTasks.createDiv("kanban-style-tasks");
     this.loadTodayTasks(tasksList);
+  }
+  createSyncButton(container) {
+    container.empty();
+    const selectedDate = this.selectedCalendarDate;
+    const kanbanPath = this.getDailyNotePath(selectedDate);
+    const kanbanFile = this.app.vault.getAbstractFileByPath(kanbanPath);
+    const hasKanbanFile = kanbanFile instanceof import_obsidian.TFile;
+    const dateStr = selectedDate.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: selectedDate.getFullYear() !== (/* @__PURE__ */ new Date()).getFullYear() ? "numeric" : void 0
+    });
+    const isToday = this.isSameDay(selectedDate, /* @__PURE__ */ new Date());
+    const dateLabel = isToday ? "Today" : dateStr;
+    const syncBtn = container.createEl("button", {
+      text: `\u{1F504} Sync ${dateLabel} \u2192 Daily Note`,
+      cls: "sync-kanban-btn"
+    });
+    syncBtn.style.width = "100%";
+    syncBtn.style.padding = "8px";
+    syncBtn.style.cursor = hasKanbanFile ? "pointer" : "not-allowed";
+    syncBtn.style.opacity = hasKanbanFile ? "1" : "0.5";
+    syncBtn.disabled = !hasKanbanFile;
+    if (!hasKanbanFile) {
+      syncBtn.title = `No Kanban file exists for ${dateLabel}. Create one first.`;
+    } else {
+      syncBtn.title = `Copy tasks from ${dateLabel}'s Kanban to Daily Note`;
+    }
+    syncBtn.onclick = async () => {
+      if (!hasKanbanFile) return;
+      await this.syncKanbanToDailyNote(selectedDate);
+    };
+  }
+  isSameDay(date1, date2) {
+    return date1.getFullYear() === date2.getFullYear() && date1.getMonth() === date2.getMonth() && date1.getDate() === date2.getDate();
+  }
+  async syncKanbanToDailyNote(date) {
+    const dateYear = date.getFullYear();
+    const dateMonth = String(date.getMonth() + 1).padStart(2, "0");
+    const dateDay = String(date.getDate()).padStart(2, "0");
+    const dateStr = `${dateYear}-${dateMonth}-${dateDay}`;
+    const kanbanPath = this.getDailyNotePath(date);
+    const dailyNotePath = `Daily Note ${dateStr}.md`;
+    try {
+      const kanbanFile = this.app.vault.getAbstractFileByPath(kanbanPath);
+      if (!(kanbanFile instanceof import_obsidian.TFile)) {
+        new import_obsidian.Notice("No Kanban file found for this day");
+        return;
+      }
+      const kanbanContent = await this.app.vault.read(kanbanFile);
+      const tasks = this.extractTasksFromKanban(kanbanContent);
+      if (tasks.length === 0) {
+        new import_obsidian.Notice("No tasks found in Kanban file");
+        return;
+      }
+      const tasksSection = this.formatTasksForDailyNote(tasks);
+      let dailyNoteFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
+      if (dailyNoteFile instanceof import_obsidian.TFile) {
+        let content = await this.app.vault.read(dailyNoteFile);
+        const syncMarker = "## Tasks from Kanban";
+        if (content.includes(syncMarker)) {
+          const regex = new RegExp(`${syncMarker}[\\s\\S]*?(?=\\n## |$)`, "g");
+          content = content.replace(regex, tasksSection);
+        } else {
+          if (content.includes("## Tasks")) {
+            content = content.replace("## Tasks", `## Tasks
+
+${tasksSection}`);
+          } else {
+            content += `
+
+${tasksSection}`;
+          }
+        }
+        await this.app.vault.modify(dailyNoteFile, content);
+        new import_obsidian.Notice(`Synced ${tasks.length} tasks to Daily Note`);
+      } else {
+        const newContent = `# Daily Note ${dateStr}
+
+## Tasks
+
+${tasksSection}
+
+## Notes
+`;
+        await this.app.vault.create(dailyNotePath, newContent);
+        new import_obsidian.Notice(`Created Daily Note with ${tasks.length} tasks`);
+      }
+    } catch (error) {
+      console.error("[SYNC] Failed to sync Kanban to Daily Note:", error);
+      new import_obsidian.Notice("Failed to sync tasks. Check console for details.");
+    }
+  }
+  extractTasksFromKanban(content) {
+    const tasks = [];
+    let currentColumn = "";
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const headerMatch = line.match(/^##\s+(.+)/);
+      if (headerMatch) {
+        currentColumn = headerMatch[1].trim();
+        continue;
+      }
+      const checkboxMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/);
+      if (checkboxMatch && currentColumn) {
+        let text = checkboxMatch[2].trim();
+        let timeSeconds = 0;
+        const timerMatch = text.match(/ - (?:🍎\s*)?(\d+):(\d{2})/) || text.match(/(\d+):(\d{2})$/);
+        console.log("[SYNC EXTRACT] Task text:", text, "Timer match:", timerMatch);
+        if (timerMatch) {
+          const minutes = parseInt(timerMatch[1], 10);
+          const seconds = parseInt(timerMatch[2], 10);
+          timeSeconds = minutes * 60 + seconds;
+        }
+        text = text.replace(/ - (?:🍎\s*)?\d+:\d{2}/, "").trim();
+        text = text.replace(/#\S+\s*$/g, "").trim();
+        if (text) {
+          tasks.push({
+            text,
+            column: currentColumn,
+            completed: checkboxMatch[1].toLowerCase() === "x",
+            timeSeconds
+          });
+        }
+      }
+    }
+    return tasks;
+  }
+  formatTimeHHMM(totalSeconds) {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor(totalSeconds % 3600 / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  }
+  formatTasksForDailyNote(tasks) {
+    const now = /* @__PURE__ */ new Date();
+    const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+    const includeWorkTime = this.plugin.settings.includeWorkTimeInSync;
+    let output = `## Tasks from Kanban
+`;
+    output += `*Synced at ${timeStr}*
+
+`;
+    const byColumn = {};
+    for (const task of tasks) {
+      if (!byColumn[task.column]) {
+        byColumn[task.column] = [];
+      }
+      byColumn[task.column].push(task);
+    }
+    let totalWorkSeconds = 0;
+    let finishedWorkSeconds = 0;
+    for (const task of tasks) {
+      totalWorkSeconds += task.timeSeconds;
+      if (task.completed) {
+        finishedWorkSeconds += task.timeSeconds;
+      }
+    }
+    for (const [column, columnTasks] of Object.entries(byColumn)) {
+      output += `### ${column}
+`;
+      for (const task of columnTasks) {
+        const checkbox = task.completed ? "[x]" : "[ ]";
+        if (includeWorkTime && task.timeSeconds > 0) {
+          output += `- ${checkbox} ${task.text} \u23F1\uFE0F ${this.formatTimeHHMM(task.timeSeconds)}
+`;
+        } else {
+          output += `- ${checkbox} ${task.text}
+`;
+        }
+      }
+      output += "\n";
+    }
+    if (includeWorkTime && totalWorkSeconds > 0) {
+      output += `---
+
+`;
+      output += `### \u{1F4CA} Work Time Summary
+
+`;
+      output += `| Metric | Time |
+`;
+      output += `|--------|------|
+`;
+      output += `| **Total Work** | ${this.formatTimeHHMM(totalWorkSeconds)} |
+`;
+      output += `| **Finished Tasks** | ${this.formatTimeHHMM(finishedWorkSeconds)} |
+`;
+      output += `| **In Progress** | ${this.formatTimeHHMM(totalWorkSeconds - finishedWorkSeconds)} |
+`;
+      output += `
+`;
+    }
+    return output;
   }
   createMiniCalendar(container) {
     const now = /* @__PURE__ */ new Date();
@@ -491,24 +730,39 @@ kanban-plugin: board
       if (day === today) {
         dayEl.classList.add("today");
       }
+      const thisDate = new Date(year, month, day);
+      if (this.isSameDay(thisDate, this.selectedCalendarDate)) {
+        dayEl.classList.add("selected");
+      }
       dayEl.onclick = () => {
         const date = new Date(year, month, day);
-        const dateStr = date.toISOString().split("T")[0];
-        const dailyNoteName = `Daily Note ${dateStr}`;
+        this.selectedCalendarDate = date;
+        grid.querySelectorAll(".calendar-day.selected").forEach((el) => el.classList.remove("selected"));
+        dayEl.classList.add("selected");
+        const syncSection = this.container?.querySelector(".sync-section");
+        if (syncSection) {
+          this.createSyncButton(syncSection);
+        }
+        const dateYear = date.getFullYear();
+        const dateMonth = String(date.getMonth() + 1).padStart(2, "0");
+        const dateDay = String(date.getDate()).padStart(2, "0");
+        const dateStr = `${dateYear}-${dateMonth}-${dateDay}`;
+        const dailyNoteName = `Daily Note ${dateStr}.md`;
         const file = this.app.vault.getAbstractFileByPath(dailyNoteName);
         if (file instanceof import_obsidian.TFile) {
           this.app.workspace.getLeaf().openFile(file);
         } else {
-          this.app.vault.create(dailyNoteName, `# ${dailyNoteName}
+          this.app.vault.create(dailyNoteName, `# Daily Note ${dateStr}
 
 ## Tasks
 
 ## Notes
-`);
-          const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
-          if (newFile instanceof import_obsidian.TFile) {
-            this.app.workspace.getLeaf().openFile(newFile);
-          }
+`).then(() => {
+            const newFile = this.app.vault.getAbstractFileByPath(dailyNoteName);
+            if (newFile instanceof import_obsidian.TFile) {
+              this.app.workspace.getLeaf().openFile(newFile);
+            }
+          });
         }
       };
     }
@@ -567,19 +821,33 @@ kanban-plugin: board
       columns.forEach((column) => {
         const columnEl = columnsContainer.createDiv("kanban-column");
         columnEl.createEl("h4", { text: column.title });
+        const isDoneColumn = this.isDoneColumn(column.title);
         const tasksList = columnEl.createDiv("column-tasks");
         if (column.tasks.length === 0) {
           tasksList.createEl("p", { text: "No tasks", cls: "empty-column" });
         } else {
           column.tasks.forEach((task) => {
             const taskEl = tasksList.createDiv("kanban-task");
-            const checkbox = taskEl.createEl("input", { type: "checkbox" });
-            checkbox.checked = task.completed;
+            if (isDoneColumn) {
+              const checkbox = taskEl.createEl("input", { type: "checkbox" });
+              checkbox.checked = true;
+              checkbox.disabled = true;
+              checkbox.style.cursor = "default";
+              taskEl.classList.add("completed");
+            } else {
+              const statusIndicator = taskEl.createSpan("task-status-indicator");
+              if (this.isProgressColumn(column.title)) {
+                statusIndicator.textContent = "\u{1F6A7}";
+                statusIndicator.title = "In Progress";
+              } else {
+                statusIndicator.textContent = "\u25CB";
+                statusIndicator.title = "To Do";
+              }
+              statusIndicator.style.marginRight = "8px";
+              statusIndicator.style.fontSize = "14px";
+            }
             const taskTextEl = taskEl.createSpan("task-text");
             taskTextEl.textContent = task.text;
-            if (task.completed) {
-              taskEl.classList.add("completed");
-            }
           });
         }
       });
@@ -667,8 +935,6 @@ kanban-plugin: board
       console.error("Timer container not found");
       return;
     }
-    const taskContextDiv = timerContainer.createDiv("task-context-display");
-    this.updateTaskContextDisplay();
     const btnGroup = timerContainer.createDiv({ cls: "btn-group" });
     const mainControls = btnGroup.createDiv({ cls: "btn-group-main" });
     const secondaryControls = btnGroup.createDiv({ cls: "btn-group-secondary" });
@@ -732,6 +998,18 @@ kanban-plugin: board
         }
       }
     });
+    const isMuted = this.plugin.settings.muteSounds;
+    const muteBtn = this.createControlButton(secondaryControls, {
+      icon: isMuted ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>',
+      text: isMuted ? "Unmute" : "Mute",
+      ariaLabel: isMuted ? "Unmute Sounds" : "Mute Sounds",
+      onClick: async () => {
+        this.plugin.settings.muteSounds = !this.plugin.settings.muteSounds;
+        await this.plugin.saveSettings();
+        this.updateMuteButton();
+      }
+    });
+    this.muteBtn = muteBtn;
     this.modeSpan = modeText;
     this.timeSpan = timeText;
     this.progressCircle = progressCircle;
@@ -763,6 +1041,20 @@ kanban-plugin: board
     const offset = circumference * (1 - progress);
     this.progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
     this.progressCircle.style.strokeDashoffset = offset.toString();
+  }
+  // Update mute button icon and text based on current mute state
+  updateMuteButton() {
+    if (!this.muteBtn) return;
+    const isMuted = this.plugin.settings.muteSounds;
+    const iconSpan = this.muteBtn.querySelector(".control-icon");
+    const textSpan = this.muteBtn.querySelector(".control-text");
+    if (iconSpan) {
+      iconSpan.innerHTML = isMuted ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    }
+    if (textSpan) {
+      textSpan.textContent = isMuted ? "Unmute" : "Mute";
+    }
+    this.muteBtn.setAttribute("aria-label", isMuted ? "Unmute Sounds" : "Mute Sounds");
   }
   updateDisplay() {
     if (!this.timeSpan || !this.progressCircle || !this.modeSpan) return;
@@ -1244,6 +1536,16 @@ kanban-plugin: board
         font-weight: 600;
       }
       
+      .calendar-day.selected {
+        outline: 2px solid var(--interactive-accent);
+        outline-offset: -2px;
+      }
+      
+      .calendar-day.today.selected {
+        outline: 2px solid var(--text-on-accent);
+        outline-offset: -2px;
+      }
+      
       .calendar-day.empty {
         cursor: default;
       }
@@ -1459,15 +1761,44 @@ kanban-plugin: board
   normalizeColumnTitle(columnTitle) {
     return columnTitle.toLowerCase().replace(/\s*\([^)]*\)\s*$/, "").replace(/[^\w\s#-]/g, "").replace(/\s+/g, " ").trim();
   }
-  isProgressColumn(columnTitle) {
+  isTodoColumn(columnTitle) {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    if (mainColumns?.todo) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.todo);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
     const normalized = this.normalizeColumnTitle(columnTitle);
-    return normalized.includes("in progress") || normalized.includes("phase progress") || normalized.includes("current tasks") || normalized.includes("phase completion") || normalized === "doing" || normalized === "progress";
+    return normalized.includes("to do") || normalized.includes("todo") || normalized.includes("backlog") || normalized.includes("\u{1F4CB}") || normalized === "to-do";
+  }
+  isProgressColumn(columnTitle) {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    if (mainColumns?.progress) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.progress);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
+    const normalized = this.normalizeColumnTitle(columnTitle);
+    return normalized.includes("in progress") || normalized.includes("phase progress") || normalized.includes("current tasks") || normalized.includes("phase completion") || normalized.includes("\u{1F6A7}") || normalized === "doing" || normalized === "progress";
   }
   isDoneColumn(columnTitle) {
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+    if (mainColumns?.done) {
+      const normalizedMapping = this.normalizeColumnTitle(mainColumns.done);
+      const normalizedTitle = this.normalizeColumnTitle(columnTitle);
+      if (normalizedTitle.includes(normalizedMapping) || normalizedMapping.includes(normalizedTitle)) {
+        return true;
+      }
+    }
     const normalized = this.normalizeColumnTitle(columnTitle);
-    return normalized.includes("done") || // This catches "Done - Phase 1 (Code)" 
-    normalized.includes("\u2705") || // Catches any column with checkmark emoji
-    normalized.includes("completed") || normalized.includes("finished") || normalized === "complete";
+    return normalized.includes("done") || normalized.includes("\u2705") || normalized.includes("completed") || normalized.includes("finished") || normalized === "complete";
   }
   findColumnsByType(type) {
     const columns = [];
@@ -1603,63 +1934,70 @@ kanban-plugin: board
   }
   // Track last updated timer value per task
   async updateTaskInKanbanFile(taskId, timeString) {
-    if (!this.plugin.settings.updateTaskTimerInFile) return;
+    if (!this.plugin.settings.updateTaskTimerInFile) {
+      console.log("[KANBAN UPDATE] Skipped: feature disabled");
+      return;
+    }
     if (!this.plugin.isRunning || this.plugin.currentMode !== "work") {
+      console.log("[KANBAN UPDATE] Skipped: timer not running or not work mode");
       return;
     }
     if (!timeString || timeString === "0:00") {
+      console.log("[KANBAN UPDATE] Skipped: timer is 0:00");
       return;
     }
     const lastValue = this.lastUpdateTimerValue.get(taskId);
     if (lastValue === timeString) {
+      console.log("[KANBAN UPDATE] Skipped: value unchanged");
       return;
     }
     const now = Date.now();
     if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
+      console.log("[KANBAN UPDATE] Skipped: debounce (", now - this.lastKanbanUpdateTime, "ms since last)");
       return;
     }
+    console.log("[KANBAN UPDATE] Attempting update for task:", taskId, "time:", timeString);
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
-      if (!boardPath) return;
-      const file = this.app.vault.getAbstractFileByPath(boardPath);
-      if (!(file instanceof import_obsidian.TFile)) return;
-      const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
-      if (!taskElement) return;
-      if (taskElement.classList.contains("task-completed")) {
-        console.log("[KANBAN UPDATE] Skipping completed task:", taskId);
+      if (!boardPath) {
+        console.log("[KANBAN UPDATE] Failed: no boardPath");
         return;
       }
-      const taskTextElement = taskElement.querySelector(".task-text");
-      if (!taskTextElement) return;
-      let originalText = taskTextElement.textContent || "";
-      originalText = originalText.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "").trim();
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian.TFile)) {
+        console.log("[KANBAN UPDATE] Failed: file not found at", boardPath);
+        return;
+      }
+      const taskText = this.currentTaskElement?.querySelector(".task-text")?.textContent;
+      if (!taskText) {
+        console.log("[KANBAN UPDATE] Failed: no task text found");
+        return;
+      }
       const content = await this.app.vault.read(file);
       const lines = content.split("\n");
       let updated = false;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if ((line.includes("- [ ]") || line.includes("- [x]")) && line.includes(originalText)) {
-          let cleanLine = line.replace(/ - 🍎 \d+:\d{2}/g, "").replace(/ - \d+:\d{2}/g, "").replace(/ \[\d+:\d{2}\]/g, "");
-          if (timeString && timeString !== "0:00") {
-            const tagIndex = cleanLine.search(/#\w+/);
-            if (tagIndex !== -1) {
-              lines[i] = cleanLine.substring(0, tagIndex).trimEnd() + ` - \u{1F34E} ${timeString} ` + cleanLine.substring(tagIndex);
-            } else {
-              lines[i] = cleanLine.trimEnd() + ` - \u{1F34E} ${timeString}`;
-            }
-          } else {
-            lines[i] = cleanLine;
+        const taskMatch = line.match(/^(- \[[ x]\] )(.+?)( - (?:🍎 )?\d+:\d{2})?$/);
+        if (taskMatch) {
+          const prefix = taskMatch[1];
+          let lineTaskText = taskMatch[2].trim();
+          lineTaskText = lineTaskText.replace(/ - (?:🍎 )?\d+:\d{2}$/, "").trim();
+          if (lineTaskText === taskText) {
+            lines[i] = `${prefix}${taskText} - \u{1F34E} ${timeString}`;
+            updated = true;
+            console.log("[KANBAN UPDATE] Updated line:", lines[i]);
+            break;
           }
-          updated = true;
-          console.log("[KANBAN UPDATE] Updated line:", lines[i]);
-          break;
         }
       }
       if (updated) {
         await this.app.vault.modify(file, lines.join("\n"));
-        this.lastKanbanUpdateTime = now;
+        this.lastKanbanUpdateTime = Date.now();
         this.lastUpdateTimerValue.set(taskId, timeString);
-        console.log("[KANBAN UPDATE] Task timer updated in file:", originalText, "\u2192", timeString);
+        console.log("[KANBAN UPDATE] Successfully wrote to file");
+      } else {
+        console.log("[KANBAN UPDATE] Task not found in file:", taskText);
       }
     } catch (error) {
       console.error("[KANBAN UPDATE] Error updating task in file:", error);
@@ -1904,6 +2242,11 @@ kanban-plugin: board
       console.warn("[KANBAN LOAD] Kanban selector not initialized");
       return;
     }
+    if (this.isLoadingKanbanBoards) {
+      console.log("[KANBAN LOAD] Already loading, skipping duplicate call");
+      return;
+    }
+    this.isLoadingKanbanBoards = true;
     console.log("[KANBAN LOAD] Loading Kanban boards...");
     while (this.kanbanSelector.options.length > 1) {
       this.kanbanSelector.remove(1);
@@ -1978,6 +2321,8 @@ kanban-plugin: board
       }
     } catch (error) {
       console.error("Error loading Kanban boards:", error);
+    } finally {
+      this.isLoadingKanbanBoards = false;
     }
   }
   async loadKanbanTasks(boardPath) {
@@ -1986,7 +2331,9 @@ kanban-plugin: board
       return;
     }
     try {
+      const savedScrollLeft = this.tasksContainer.scrollLeft;
       this.tasksContainer.empty();
+      this.tasksContainer.scrollLeft = savedScrollLeft;
       if (!boardPath || boardPath.trim() === "") {
         this.tasksContainer.createEl("p", {
           text: "Please select a Kanban board",
@@ -2144,12 +2491,36 @@ kanban-plugin: board
         return;
       }
       let sortedColumns;
-      if (allColumnNames.length > 0) {
+      const userColumnOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath];
+      const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
+      console.log("[SIDEBAR COLUMNS] Board path:", boardPath);
+      console.log("[SIDEBAR COLUMNS] User column order:", userColumnOrder);
+      console.log("[SIDEBAR COLUMNS] Main columns mapping:", mainColumns);
+      console.log("[SIDEBAR COLUMNS] File columns:", allColumnNames);
+      if (userColumnOrder && userColumnOrder.length > 0) {
+        console.log("[SIDEBAR COLUMNS] Using user column order");
+        sortedColumns = userColumnOrder.filter(
+          (col) => allColumnNames.some(
+            (fileCol) => this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(col) || fileCol.includes(col) || col.includes(fileCol)
+          )
+        );
+        console.log("[SIDEBAR COLUMNS] After filter:", sortedColumns);
+        sortedColumns = sortedColumns.map((userCol) => {
+          const matchingFileCol = allColumnNames.find(
+            (fileCol) => this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(userCol) || fileCol.includes(userCol) || userCol.includes(fileCol)
+          );
+          return matchingFileCol || userCol;
+        });
+        console.log("[SIDEBAR COLUMNS] After mapping:", sortedColumns);
+        console.log("[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):", sortedColumns);
+      } else if (allColumnNames.length > 0) {
+        console.log("[SIDEBAR COLUMNS] Using file order (no user config)");
         sortedColumns = allColumnNames;
       } else {
+        console.log("[SIDEBAR COLUMNS] Using fallback sorting");
         sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
-          const aCompleted = a.toLowerCase().includes("done") || a.toLowerCase().includes("complete");
-          const bCompleted = b.toLowerCase().includes("done") || b.toLowerCase().includes("complete");
+          const aCompleted = this.isDoneColumn(a);
+          const bCompleted = this.isDoneColumn(b);
           if (aCompleted && !bCompleted) return 1;
           if (!aCompleted && bCompleted) return -1;
           return 0;
@@ -2168,6 +2539,34 @@ kanban-plugin: board
           text: `${columnName} (${columnTasks.length})`,
           cls: "column-title"
         });
+        if (!this.isDoneColumn(columnName)) {
+          const quickAddContainer = taskGroup.createEl("div", { cls: "quick-add-container" });
+          quickAddContainer.style.padding = "4px 8px";
+          quickAddContainer.style.display = "flex";
+          quickAddContainer.style.gap = "4px";
+          const quickAddInput = quickAddContainer.createEl("input", {
+            cls: "quick-add-input",
+            attr: {
+              placeholder: "+ Add task...",
+              type: "text"
+            }
+          });
+          quickAddInput.style.flex = "1";
+          quickAddInput.style.padding = "4px 8px";
+          quickAddInput.style.fontSize = "0.85em";
+          quickAddInput.style.border = "1px solid var(--background-modifier-border)";
+          quickAddInput.style.borderRadius = "4px";
+          quickAddInput.style.background = "var(--background-primary)";
+          quickAddInput.addEventListener("keydown", async (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && quickAddInput.value.trim()) {
+              e.preventDefault();
+              const taskText = quickAddInput.value.trim();
+              await this.addTaskToColumn(taskText, columnName, boardPath);
+              quickAddInput.value = "";
+            }
+          });
+        }
         const taskList = taskGroup.createEl("ul", { cls: "pomodoro-task-list" });
         taskList.addEventListener("dragover", (e) => {
           e.preventDefault();
@@ -2212,11 +2611,14 @@ kanban-plugin: board
         }
         for (const task of columnTasks) {
           const taskId = `task-${boardPath}-${globalTaskIndex++}`;
+          const priority = this.detectTaskPriority(task.text);
           const taskItem = taskList.createEl("li", {
-            cls: `pomodoro-task-item ${task.completed ? "task-completed" : ""}`
+            cls: `pomodoro-task-item ${task.completed ? "task-completed" : ""} priority-${priority}`
           });
           taskItem.setAttribute("data-task-id", taskId);
           taskItem.setAttribute("data-column", task.column);
+          taskItem.setAttribute("data-priority", priority);
+          this.applyPriorityStyle(taskItem, priority);
           const taskContent = taskItem.createDiv({ cls: "task-content" });
           const checkbox = taskContent.createEl("input", {
             cls: "task-checkbox"
@@ -2262,10 +2664,7 @@ kanban-plugin: board
                     if (moved) {
                       new import_obsidian.Notice(`Task moved to "${doneTitle}"`);
                       setTimeout(() => {
-                        const updatedDoneColumns = this.findColumnsByType("done");
-                        if (updatedDoneColumns.length > 0) {
-                          this.scrollToColumn(updatedDoneColumns[0].element);
-                        }
+                        this.selectNextIncompleteTaskInColumn(currentColumnTitle);
                       }, 400);
                     }
                   }
@@ -2331,6 +2730,9 @@ kanban-plugin: board
           taskItem.addEventListener("click", () => {
             this.selectTask(taskId, taskItem, taskTimer);
           });
+          taskItem.addEventListener("contextmenu", (e) => {
+            this.showTaskContextMenu(e, taskId, taskItem, task);
+          });
           taskItem.draggable = true;
           taskItem.addEventListener("dragstart", (e) => {
             e.dataTransfer?.setData("text/plain", taskId);
@@ -2340,11 +2742,21 @@ kanban-plugin: board
           taskItem.addEventListener("dragend", () => {
             taskItem.classList.remove("dragging");
           });
-          if (this.plugin.settings.currentTask === taskId) {
+          if (this.plugin.settings.currentTask === taskId && this.activeTaskId !== taskId) {
             this.selectTask(taskId, taskItem, taskTimer);
+          } else if (this.plugin.settings.currentTask === taskId && this.activeTaskId === taskId) {
+            taskItem.classList.add("pomodoro-task-active");
+            this.currentTaskElement = taskItem;
           }
         }
       }
+      this.updateQuickScrollButtons(sortedColumns);
+      this.setupKeyboardNavigation();
+      requestAnimationFrame(() => {
+        if (this.tasksContainer && savedScrollLeft > 0) {
+          this.tasksContainer.scrollLeft = savedScrollLeft;
+        }
+      });
       if (tasks.length === 0) {
         const hintEl = this.tasksContainer.createEl("p", {
           text: "Tip: Click the refresh button to reload boards",
@@ -2369,7 +2781,72 @@ kanban-plugin: board
       });
     }
   }
+  /**
+   * Strip the count suffix (N) from a column title for matching.
+   * E.g., "In Progress (2)" -> "In Progress"
+   */
+  stripColumnCount(title) {
+    return title.replace(/\s*\(\d+\)\s*$/, "").trim();
+  }
+  /**
+   * Select the next incomplete task in a specific column.
+   * If no incomplete tasks remain in the progress column, pause the timer.
+   * Does NOT scroll to earlier columns - only looks in progress-type columns.
+   */
+  selectNextIncompleteTaskInColumn(columnTitle) {
+    if (!this.tasksContainer) return;
+    const searchTitle = this.stripColumnCount(columnTitle);
+    console.log("[AUTO-SELECT] Looking for column (base name):", searchTitle);
+    const groups = Array.from(this.tasksContainer.querySelectorAll(".pomodoro-task-group"));
+    let targetGroup = null;
+    for (const group of groups) {
+      const title = group.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
+      const baseTitle = this.stripColumnCount(title);
+      if (baseTitle === searchTitle) {
+        targetGroup = group;
+        console.log("[AUTO-SELECT] Found matching column:", title);
+        break;
+      }
+    }
+    if (!targetGroup) {
+      console.log("[AUTO-SELECT] Column not found:", searchTitle);
+      this.pauseTimerIfNoActiveTasks();
+      return;
+    }
+    const incompleteTasks = targetGroup.querySelectorAll(".pomodoro-task-item:not(.task-completed)");
+    if (incompleteTasks.length === 0) {
+      console.log("[AUTO-SELECT] No incomplete tasks in column:", searchTitle);
+      this.pauseTimerIfNoActiveTasks();
+      return;
+    }
+    const nextTask = incompleteTasks[0];
+    const taskId = nextTask.getAttribute("data-task-id");
+    const timerElement = nextTask.querySelector(".task-timer");
+    if (taskId && timerElement) {
+      console.log("[AUTO-SELECT] Selecting next incomplete task in column:", searchTitle);
+      this.selectTask(taskId, nextTask, timerElement);
+      this.scrollToColumn(targetGroup);
+    } else {
+      this.pauseTimerIfNoActiveTasks();
+    }
+  }
+  /**
+   * Pause the timer if there are no active tasks.
+   */
+  pauseTimerIfNoActiveTasks() {
+    if (!this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === "work") {
+      console.log("[AUTO-SELECT] No active task, pausing timer");
+      this.plugin.togglePause();
+      new import_obsidian.Notice("No more tasks - timer paused");
+    }
+  }
   async selectTask(taskId, taskElement, timerElement) {
+    const now = Date.now();
+    if (taskId === this.lastSelectedTaskId && now - this.lastSelectTime < 100) {
+      return;
+    }
+    this.lastSelectTime = now;
+    this.lastSelectedTaskId = taskId;
     if (this.warningElement) {
       this.warningElement.style.display = "none";
     }
@@ -2460,8 +2937,9 @@ kanban-plugin: board
       const prevTaskParts = this.activeTaskId.match(/^task-(.+)-(\d+)$/);
       const prevKanbanPath = prevTaskParts ? prevTaskParts[1] : "";
       const prevKanbanFileName = prevKanbanPath.split("/").pop()?.replace(".md", "") || "Unknown";
-      await this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName);
-      console.log("  Task time logged for board:", prevKanbanFileName);
+      this.logTaskTime(this.activeTaskId, newTime, prevKanbanFileName).then(() => {
+        console.log("  Task time logged for board:", prevKanbanFileName);
+      });
     }
     const taskList = this.tasksContainer?.querySelector(".pomodoro-task-list");
     if (taskList) {
@@ -2478,11 +2956,13 @@ kanban-plugin: board
     this.currentTaskElement = taskElement;
     this.activeTaskId = taskId;
     this.lastUpdateTime = Date.now();
+    this.activeTaskText = taskText;
+    this.updateActiveTaskDisplay(taskText);
     const existingTime = this.taskTimers.get(taskId) || 0;
     console.log("  New Task Existing Time:", Math.floor(existingTime / 60) + ":" + String(Math.floor(existingTime % 60)).padStart(2, "0"));
     console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
     this.plugin.settings.currentTask = taskId;
-    await this.plugin.saveSettings();
+    this.plugin.saveSettings();
     this.updateTaskTimer(timerElement);
   }
   updateTaskTimer(timerElement) {
@@ -2621,6 +3101,378 @@ Task timing log organized by Kanban board.
       this.quickBreakButton.setAttribute("aria-label", enabled ? `Quick ${this.plugin.settings.quickBreakDuration} min break` : "Quick break disabled");
     }
   }
+  // Update active task display under timer (TaskNotes-style)
+  updateActiveTaskDisplay(taskText) {
+    if (!this.activeTaskDisplay) return;
+    if (taskText) {
+      const displayText = taskText.length > 40 ? taskText.substring(0, 37) + "..." : taskText;
+      this.activeTaskDisplay.innerHTML = `<span style="color: var(--text-accent);">\u{1F3AF}</span> ${displayText}`;
+      this.activeTaskDisplay.style.color = "var(--text-normal)";
+    } else {
+      this.activeTaskDisplay.innerHTML = '<span style="opacity: 0.6">No task selected</span>';
+      this.activeTaskDisplay.style.color = "var(--text-muted)";
+    }
+  }
+  // Clear active task display
+  clearActiveTaskDisplay() {
+    this.activeTaskText = "";
+    this.updateActiveTaskDisplay("");
+  }
+  // Update schedule display in sidebar
+  updateScheduleDisplay(container) {
+    if (!container) return;
+    container.empty();
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      container.createSpan({ text: "\u{1F4CB} Board:", cls: "schedule-label" });
+      boardSchedule.phases.forEach((phase, i) => {
+        const icon = phase.type === "Work" ? "\u{1F345}" : phase.type === "Short Break" ? "\u2615" : "\u{1F334}";
+        const chip = container.createSpan({ cls: "schedule-chip-mini" });
+        chip.innerHTML = `${icon}${phase.duration}m`;
+        chip.style.background = "var(--background-modifier-border)";
+        chip.style.padding = "2px 6px";
+        chip.style.borderRadius = "10px";
+        chip.style.fontSize = "0.85em";
+      });
+    } else {
+      const work = currentSchedule.workDuration || 25;
+      const shortBreak = currentSchedule.shortBreakDuration || 5;
+      const longBreak = currentSchedule.longBreakDuration || 15;
+      container.innerHTML = `<span style="opacity:0.7">\u{1F345}${work}m</span> <span style="opacity:0.7">\u2615${shortBreak}m</span> <span style="opacity:0.7">\u{1F334}${longBreak}m</span>`;
+    }
+  }
+  // Public method to refresh view when settings change
+  async refreshView() {
+    console.log("[REFRESH] Refreshing sidebar view after settings change");
+    const scheduleDisplay = this.container?.querySelector(".schedule-display");
+    if (scheduleDisplay) {
+      this.updateScheduleDisplay(scheduleDisplay);
+    }
+    if (this.plugin.settings.kanbanBoardPath) {
+      await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+    }
+  }
+  // Update quick scroll buttons based on loaded columns
+  updateQuickScrollButtons(columns) {
+    if (!this.quickScrollContainer) return;
+    this.quickScrollContainer.empty();
+    this.columnButtons.clear();
+    if (columns.length === 0) {
+      this.quickScrollContainer.style.display = "none";
+      return;
+    }
+    this.quickScrollContainer.style.display = "flex";
+    for (const columnName of columns) {
+      const btn = this.quickScrollContainer.createEl("button", {
+        cls: "quick-scroll-btn",
+        text: this.getColumnIcon(columnName) + " " + this.getShortColumnName(columnName)
+      });
+      btn.style.flex = "1";
+      btn.style.padding = "4px 8px";
+      btn.style.fontSize = "0.8em";
+      btn.style.border = "1px solid var(--background-modifier-border)";
+      btn.style.borderRadius = "4px";
+      btn.style.background = "var(--background-secondary)";
+      btn.style.cursor = "pointer";
+      btn.style.transition = "all 0.2s ease";
+      btn.addEventListener("mouseenter", () => {
+        btn.style.background = "var(--background-modifier-hover)";
+      });
+      btn.addEventListener("mouseleave", () => {
+        btn.style.background = "var(--background-secondary)";
+      });
+      btn.addEventListener("click", () => {
+        this.scrollToColumnByName(columnName);
+      });
+      this.columnButtons.set(columnName, btn);
+    }
+  }
+  // Get icon for column based on name
+  getColumnIcon(columnName) {
+    const lower = columnName.toLowerCase();
+    if (lower.includes("todo") || lower.includes("to do") || lower.includes("backlog")) return "\u{1F4CB}";
+    if (lower.includes("progress") || lower.includes("doing") || lower.includes("active")) return "\u{1F6A7}";
+    if (lower.includes("done") || lower.includes("complete") || lower.includes("finished")) return "\u2705";
+    return "\u{1F4CC}";
+  }
+  // Get short name for column button
+  getShortColumnName(columnName) {
+    let name = columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, "").replace(/\(\d+\)/g, "").trim();
+    if (name.toLowerCase().includes("in progress")) return "Progress";
+    if (name.toLowerCase().includes("to do")) return "Todo";
+    if (name.length > 10) return name.substring(0, 8) + "..";
+    return name;
+  }
+  // Scroll to column by name
+  scrollToColumnByName(columnName) {
+    if (!this.tasksContainer) return;
+    const groups = Array.from(this.tasksContainer.querySelectorAll(".pomodoro-task-group"));
+    for (const group of groups) {
+      const titleEl = group.querySelector(".column-title");
+      if (titleEl && titleEl.textContent?.includes(columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim())) {
+        group.scrollIntoView({ behavior: "smooth", block: "start" });
+        group.style.transition = "background 0.3s ease";
+        group.style.background = "var(--background-modifier-hover)";
+        setTimeout(() => {
+          group.style.background = "";
+        }, 500);
+        break;
+      }
+    }
+  }
+  // Show context menu for task (right-click menu)
+  showTaskContextMenu(e, taskId, taskElement, task) {
+    e.preventDefault();
+    const menu = new import_obsidian.Menu();
+    if (!task.completed) {
+      menu.addItem((item) => {
+        item.setTitle("\u25B6\uFE0F Start Timer").setIcon("play").onClick(() => {
+          const timerEl = taskElement.querySelector(".task-timer");
+          if (timerEl) {
+            this.selectTask(taskId, taskElement, timerEl);
+            if (!this.plugin.isRunning) {
+              this.plugin.startTimer();
+            }
+          }
+        });
+      });
+    }
+    menu.addItem((item) => {
+      item.setTitle("\u{1F4E6} Move to...").setIcon("arrow-right").onClick(() => {
+        this.showMoveToColumnMenu(e, taskId, task.column);
+      });
+    });
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item.setTitle(task.completed ? "\u21A9\uFE0F Mark as Incomplete" : "\u2705 Mark as Complete").setIcon(task.completed ? "rotate-ccw" : "check").onClick(() => {
+        const checkbox = taskElement.querySelector(".task-checkbox");
+        if (checkbox) {
+          checkbox.checked = !checkbox.checked;
+          checkbox.dispatchEvent(new Event("change"));
+        }
+      });
+    });
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item.setTitle("\u{1F4DD} Open Kanban File").setIcon("file-text").onClick(async () => {
+        const boardPath = this.plugin.settings.kanbanBoardPath;
+        if (boardPath) {
+          const file = this.app.vault.getAbstractFileByPath(boardPath);
+          if (file instanceof import_obsidian.TFile) {
+            await this.app.workspace.getLeaf().openFile(file);
+          }
+        }
+      });
+    });
+    menu.showAtMouseEvent(e);
+  }
+  // Setup keyboard navigation for tasks
+  setupKeyboardNavigation() {
+    if (!this.tasksContainer) return;
+    if (this.keyboardNavInitialized) return;
+    this.keyboardNavInitialized = true;
+    this.tasksContainer.setAttribute("tabindex", "0");
+    this.tasksContainer.addEventListener("keydown", (e) => {
+      const target = e.target;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+      const tasks = Array.from(this.tasksContainer.querySelectorAll(".pomodoro-task-item:not(.task-completed)"));
+      if (tasks.length === 0) return;
+      let currentIndex = tasks.findIndex((t) => t.classList.contains("pomodoro-task-active"));
+      if (currentIndex === -1) currentIndex = 0;
+      switch (e.key) {
+        case "ArrowDown":
+        case "j":
+          e.preventDefault();
+          if (currentIndex < tasks.length - 1) {
+            this.focusTaskByIndex(tasks, currentIndex + 1);
+          }
+          break;
+        case "ArrowUp":
+        case "k":
+          e.preventDefault();
+          if (currentIndex > 0) {
+            this.focusTaskByIndex(tasks, currentIndex - 1);
+          }
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex];
+            const timerEl = taskEl.querySelector(".task-timer");
+            const taskId = taskEl.getAttribute("data-task-id") || "";
+            if (timerEl) {
+              this.selectTask(taskId, taskEl, timerEl);
+              if (!this.plugin.isRunning) {
+                this.plugin.startTimer();
+              }
+            }
+          }
+          break;
+        case " ":
+          e.preventDefault();
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex];
+            const checkbox = taskEl.querySelector(".task-checkbox");
+            if (checkbox) {
+              checkbox.checked = !checkbox.checked;
+              checkbox.dispatchEvent(new Event("change"));
+            }
+          }
+          break;
+        case "m":
+        case "M":
+          e.preventDefault();
+          if (tasks[currentIndex]) {
+            const taskEl = tasks[currentIndex];
+            const taskId = taskEl.getAttribute("data-task-id") || "";
+            const currentColumn = taskEl.getAttribute("data-column") || "";
+            this.moveTaskToNextColumn(taskId, currentColumn);
+          }
+          break;
+      }
+    });
+  }
+  // Focus task by index
+  focusTaskByIndex(tasks, index) {
+    tasks.forEach((t) => t.classList.remove("keyboard-focus"));
+    const targetTask = tasks[index];
+    if (targetTask) {
+      targetTask.classList.add("keyboard-focus");
+      targetTask.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const timerEl = targetTask.querySelector(".task-timer");
+      const taskId = targetTask.getAttribute("data-task-id") || "";
+      if (timerEl) {
+        this.selectTask(taskId, targetTask, timerEl);
+      }
+    }
+  }
+  // Detect task priority from text
+  detectTaskPriority(taskText) {
+    const text = taskText.toLowerCase();
+    if (text.includes("!!!") || text.includes("#high") || text.includes("\u{1F534}") || text.includes("priority: high") || text.includes("p1")) {
+      return "high";
+    }
+    if (text.includes("!!") || text.includes("#medium") || text.includes("\u{1F7E1}") || text.includes("priority: medium") || text.includes("p2")) {
+      return "medium";
+    }
+    if (text.includes("!") || text.includes("#low") || text.includes("\u{1F7E2}") || text.includes("priority: low") || text.includes("p3")) {
+      return "low";
+    }
+    if (text.includes("urgent") || text.includes("critical") || text.includes("asap") || text.includes("important") || text.includes("blocker")) {
+      return "high";
+    }
+    return "none";
+  }
+  // Apply priority styling to task item
+  applyPriorityStyle(taskItem, priority) {
+    switch (priority) {
+      case "high":
+        taskItem.style.borderLeft = "3px solid #e74c3c";
+        taskItem.style.background = "rgba(231, 76, 60, 0.05)";
+        break;
+      case "medium":
+        taskItem.style.borderLeft = "3px solid #f39c12";
+        taskItem.style.background = "rgba(243, 156, 18, 0.05)";
+        break;
+      case "low":
+        taskItem.style.borderLeft = "3px solid #27ae60";
+        taskItem.style.background = "rgba(39, 174, 96, 0.05)";
+        break;
+      default:
+        break;
+    }
+  }
+  // Move task to next column in sequence (Todo -> In Progress -> Done)
+  async moveTaskToNextColumn(taskId, currentColumn) {
+    const todoColumns = this.findColumnsByType("progress").filter(
+      (c) => c.title.toLowerCase().includes("todo") || c.title.toLowerCase().includes("to do")
+    );
+    const progressColumns = this.findColumnsByType("progress").filter(
+      (c) => c.title.toLowerCase().includes("progress") || c.title.toLowerCase().includes("doing")
+    );
+    const doneColumns = this.findColumnsByType("done");
+    const currentLower = currentColumn.toLowerCase();
+    let targetColumn = null;
+    if (currentLower.includes("todo") || currentLower.includes("to do") || currentLower.includes("backlog")) {
+      if (progressColumns.length > 0) {
+        targetColumn = { title: progressColumns[0].title, type: "progress" };
+      }
+    } else if (currentLower.includes("progress") || currentLower.includes("doing")) {
+      if (doneColumns.length > 0) {
+        targetColumn = { title: doneColumns[0].title, type: "done" };
+      }
+    }
+    if (targetColumn) {
+      await this.moveTaskToColumn(taskId, targetColumn.type, targetColumn.title);
+      new import_obsidian.Notice(`Task moved to "${targetColumn.title}"`);
+    } else {
+      new import_obsidian.Notice("No next column found");
+    }
+  }
+  // Add a new task to a specific column in the Kanban file
+  async addTaskToColumn(taskText, columnName, boardPath) {
+    try {
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian.TFile)) {
+        new import_obsidian.Notice("Kanban file not found");
+        return;
+      }
+      const content = await this.app.vault.read(file);
+      const lines = content.split("\n");
+      let insertIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.match(/^##\s+/) && line.toLowerCase().includes(columnName.toLowerCase().replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim())) {
+          insertIndex = i + 1;
+          while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+            insertIndex++;
+          }
+          break;
+        }
+      }
+      if (insertIndex === -1) {
+        new import_obsidian.Notice(`Column "${columnName}" not found in Kanban file`);
+        return;
+      }
+      const newTaskLine = `- [ ] ${taskText}`;
+      lines.splice(insertIndex, 0, newTaskLine);
+      await this.app.vault.modify(file, lines.join("\n"));
+      new import_obsidian.Notice(`Task added to "${columnName}"`);
+      setTimeout(() => {
+        this.loadKanbanTasks(boardPath);
+      }, 200);
+    } catch (error) {
+      console.error("Error adding task:", error);
+      new import_obsidian.Notice("Failed to add task");
+    }
+  }
+  // Show submenu for moving task to a column
+  showMoveToColumnMenu(e, taskId, currentColumn) {
+    const menu = new import_obsidian.Menu();
+    const todoColumns = this.findColumnsByType("progress").filter(
+      (c) => c.title.toLowerCase().includes("todo") || c.title.toLowerCase().includes("to do") || c.title.toLowerCase().includes("backlog")
+    );
+    const progressColumns = this.findColumnsByType("progress").filter(
+      (c) => !c.title.toLowerCase().includes("todo") && !c.title.toLowerCase().includes("to do")
+    );
+    const doneColumns = this.findColumnsByType("done");
+    const allColumns = [...todoColumns, ...progressColumns, ...doneColumns];
+    for (const col of allColumns) {
+      const isCurrent = col.title.includes(currentColumn) || currentColumn.includes(col.title);
+      menu.addItem((item) => {
+        item.setTitle((isCurrent ? "\u2022 " : "") + col.title).setIcon(this.isDoneColumn(col.title) ? "check-circle" : "circle").setDisabled(isCurrent).onClick(async () => {
+          const columnType = this.isDoneColumn(col.title) ? "done" : "progress";
+          await this.moveTaskToColumn(taskId, columnType, col.title);
+          new import_obsidian.Notice(`Task moved to "${col.title}"`);
+        });
+      });
+    }
+    menu.showAtMouseEvent(e);
+  }
 };
 
 // src/main.ts
@@ -2720,8 +3572,18 @@ var DEFAULT_SETTINGS = {
   enableScheduleSummary: true,
   // Enable schedule summary generation
   scheduleSummaryPath: "Pomodoro Schedule Summary.md",
-  perBoardProgressColumns: {}
+  perBoardProgressColumns: {},
   // Empty object initially
+  perBoardColumnOrder: {},
+  // Empty object initially - stores custom column ordering per board
+  perBoardMainColumns: {},
+  // Empty object initially - stores main column mappings per board
+  perBoardSchedule: {},
+  // Empty object initially - stores custom schedules per board
+  includeWorkTimeInSync: true,
+  // Include work time calculations when syncing to daily note
+  muteSounds: false
+  // Sounds ON by default
 };
 var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   constructor() {
@@ -2733,6 +3595,10 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     this.isRunning = false;
     this.currentMode = "work";
     this.sessionsCompleted = 0;
+    // Auto-logging: track last auto-log time to log every 5 minutes during work
+    this.lastAutoLogTime = 0;
+    this.AUTO_LOG_INTERVAL_MS = 5 * 60 * 1e3;
+    // 5 minutes
     // Quick break state restoration
     this.quickBreakSavedState = null;
     // Task logs storage - persists across kanban file switches
@@ -2740,6 +3606,11 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     this.kanbanFileCache = {};
     this.lastScanTime = 0;
     this.CACHE_TTL_MS = 5 * 60 * 1e3;
+    // 5 minutes cache
+    // Reference to settings tab for refresh
+    this.settingTab = null;
+    // Debounce for completeSession to prevent duplicate completions
+    this.lastSessionCompleteTime = 0;
     this.taskButtons = /* @__PURE__ */ new Map();
     // Debounce timer for Kanban refresh
     this.kanbanRefreshTimeout = null;
@@ -2748,7 +3619,6 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     // 500ms debounce
     this.KANBAN_REFRESH_INTERVAL = 5e3;
   }
-  // 5 minutes cache
   async saveKanbanCache() {
     await this.saveData({ kanbanFileCache: this.kanbanFileCache });
   }
@@ -2857,6 +3727,21 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         this.removeKanbanIntegration();
         await this.setupKanbanIntegration();
       }
+      const timerView = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+      if (timerView) {
+        if (timerView.kanbanSelector) {
+          timerView.kanbanSelector.value = selectedPath;
+        }
+        if (timerView.loadKanbanTasks) {
+          await timerView.loadKanbanTasks(selectedPath);
+        }
+        if (timerView.updateScheduleDisplay) {
+          timerView.updateScheduleDisplay();
+        }
+      }
+      if (this.settingTab) {
+        this.settingTab.display();
+      }
     });
   }
   formatTime(seconds) {
@@ -2906,7 +3791,8 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         name: "Show Timer",
         callback: () => this.activateView()
       });
-      this.addSettingTab(new EnhancedPomodoroSettingTab(this.app, this));
+      this.settingTab = new EnhancedPomodoroSettingTab(this.app, this);
+      this.addSettingTab(this.settingTab);
       if (this.settings.kanbanIntegration) {
         document.head.createEl("style", { text: kanbanStyles });
         this.setupKanbanIntegration();
@@ -2961,9 +3847,38 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     }
   }
   /**
-   * Gets the current active schedule
+   * Gets the current active schedule (checks board-specific schedule first)
    */
   getCurrentSchedule() {
+    const boardPath = this.settings.kanbanBoardPath;
+    const boardSchedule = this.settings.perBoardSchedule?.[boardPath];
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      const workPhase = boardSchedule.phases.find((p) => p.type === "Work");
+      const shortBreakPhase = boardSchedule.phases.find((p) => p.type === "Short Break");
+      const longBreakPhase = boardSchedule.phases.find((p) => p.type === "Long Break");
+      const convertPhaseType = (type) => {
+        if (type === "Work") return "work";
+        if (type === "Short Break") return "shortBreak";
+        return "longBreak";
+      };
+      const storedPhaseIndex = boardSchedule.currentPhaseIndex || 0;
+      return {
+        id: `board-${boardPath}`,
+        name: boardSchedule.name || "Board Custom",
+        workDuration: workPhase?.duration || 25,
+        shortBreakDuration: shortBreakPhase?.duration || 5,
+        longBreakDuration: longBreakPhase?.duration || 15,
+        autoStartNext: true,
+        enableQuickBreak: this.settings.enableQuickBreak,
+        quickBreakDuration: this.settings.quickBreakDuration,
+        quickBreakSound: this.settings.quickBreakSound,
+        phases: boardSchedule.phases.map((p) => ({
+          type: convertPhaseType(p.type),
+          duration: p.duration
+        })),
+        currentPhaseIndex: storedPhaseIndex
+      };
+    }
     const schedule = this.settings.schedules.find((s) => s.id === this.settings.currentScheduleId);
     if (!schedule) {
       return this.settings.schedules[0];
@@ -3020,12 +3935,19 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     }
     let currentIndex = schedule.currentPhaseIndex || 0;
     currentIndex = (currentIndex + 1) % schedule.phases.length;
-    const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
-    if (scheduleIndex !== -1) {
-      this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+    const boardPath = this.settings.kanbanBoardPath;
+    if (schedule.id.startsWith("board-") && boardPath && this.settings.perBoardSchedule?.[boardPath]) {
+      this.settings.perBoardSchedule[boardPath].currentPhaseIndex = currentIndex;
       this.saveSettings();
+      console.log("[Schedule] Advanced board schedule to phase", currentIndex, "of", schedule.phases.length);
+    } else {
+      const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
+      if (scheduleIndex !== -1) {
+        this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
+        this.saveSettings();
+      }
+      console.log("[Schedule] Advanced to phase", currentIndex, "of", schedule.phases.length);
     }
-    console.log("[Schedule] Advanced to phase", currentIndex, "of", schedule.phases.length);
   }
   /**
    * Gets a schedule by ID
@@ -3100,8 +4022,20 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   async startPomodoro() {
     if (this.isRunning) return;
     const schedule = this.getCurrentSchedule();
-    this.timeRemaining = (schedule.workDuration || 25) * 60;
-    this.currentMode = "work";
+    if (schedule.phases && schedule.phases.length > 0) {
+      const currentPhase = this.getCurrentPhase();
+      if (currentPhase) {
+        this.currentMode = currentPhase.type;
+        this.timeRemaining = currentPhase.duration * 60;
+        console.log("[Start] Using custom schedule phase:", currentPhase.type, "(", currentPhase.duration, "min)");
+      } else {
+        this.currentMode = "work";
+        this.timeRemaining = (schedule.workDuration || 25) * 60;
+      }
+    } else {
+      this.currentMode = "work";
+      this.timeRemaining = (schedule.workDuration || 25) * 60;
+    }
     this.isRunning = true;
     this.startTimer();
     await this.logSession("start");
@@ -3174,10 +4108,15 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       await this.restoreAfterQuickBreak();
       return;
     }
-    console.log("[End Cycle] Ending current session phase");
-    await this.completeSession();
+    console.log("[End Cycle] Ending current session phase (manual trigger)");
+    await this.completeSession(true);
   }
   playSound(sound) {
+    console.log("[Sound] muteSounds setting:", this.settings.muteSounds);
+    if (this.settings.muteSounds) {
+      console.log("[Sound] Muted - skipping:", sound);
+      return;
+    }
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       if (sound === "longbreak") {
@@ -3248,6 +4187,9 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   }
   startTimer() {
     if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.currentMode === "work") {
+      this.lastAutoLogTime = Date.now();
+    }
     this.timerInterval = window.setInterval(() => {
       if (!this.isRunning) return;
       this.timeRemaining--;
@@ -3255,6 +4197,15 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
       if (view && "updateActiveTaskTimer" in view && this.currentMode === "work") {
         view.updateActiveTaskTimer();
+      }
+      if (this.currentMode === "work") {
+        const now = Date.now();
+        if (now - this.lastAutoLogTime >= this.AUTO_LOG_INTERVAL_MS) {
+          this.lastAutoLogTime = now;
+          this.logSession("auto_progress").catch(
+            (err) => console.error("[AUTO LOG] Error:", err)
+          );
+        }
       }
       if (this.timeRemaining <= 0) {
         clearInterval(this.timerInterval);
@@ -3292,16 +4243,25 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
     }
-    this.currentMode = "work";
     const schedule = this.getCurrentSchedule();
     if (schedule.phases && schedule.phases.length > 0) {
-      const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
-      if (scheduleIndex !== -1) {
-        this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
-        this.saveSettings();
+      const boardPath = this.settings.kanbanBoardPath;
+      if (schedule.id.startsWith("board-") && boardPath && this.settings.perBoardSchedule?.[boardPath]) {
+        this.settings.perBoardSchedule[boardPath].currentPhaseIndex = 0;
+      } else {
+        const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
+        if (scheduleIndex !== -1) {
+          this.settings.schedules[scheduleIndex].currentPhaseIndex = 0;
+        }
       }
+      const firstPhase = schedule.phases[0];
+      this.currentMode = firstPhase.type;
+      this.timeRemaining = firstPhase.duration * 60;
+      console.log("[Reset] Starting with first phase of custom schedule:", firstPhase.type, "(", firstPhase.duration, "min)");
+    } else {
+      this.currentMode = "work";
+      this.timeRemaining = this.getDurationForPhase("work") * 60;
     }
-    this.timeRemaining = this.getDurationForPhase("work") * 60;
     this.sessionsCompleted = 0;
     this.settings.sessionsCompletedCount = 0;
     await this.saveSettings();
@@ -3313,7 +4273,13 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     }
     await this.logSession("reset");
   }
-  async completeSession() {
+  async completeSession(isManualTrigger = false) {
+    const now = Date.now();
+    if (!isManualTrigger && now - this.lastSessionCompleteTime < 5e3) {
+      console.log("[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)");
+      return;
+    }
+    this.lastSessionCompleteTime = now;
     this.isRunning = false;
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
@@ -3347,6 +4313,20 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
           nextMode = nextPhase.type;
           nextDuration = nextPhase.duration;
           console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || nextPhase.type);
+        } else if (nextPhase && nextPhase.type === "work") {
+          console.log("  \u2192 Custom Sequence: Work\u2192Work wrap-around, starting new cycle");
+          this.currentMode = "work";
+          this.timeRemaining = nextPhase.duration * 60;
+          new import_obsidian2.Notice("Starting new work cycle!");
+          this.playSound("ding");
+          this.updateStatusBar();
+          if (schedule.autoStartNext === true) {
+            console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
+            this.isRunning = true;
+            this.startTimer();
+          }
+          console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+          return;
         } else {
           const isLongBreak = this.sessionsCompleted % 4 === 0;
           nextMode = isLongBreak ? "longBreak" : "shortBreak";
@@ -3381,22 +4361,31 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
         return;
       }
-      console.log("  \u2192 Break Complete! Returning to work mode");
-      this.currentMode = "work";
+      console.log("  \u2192 Break Complete!");
       if (schedule.phases && schedule.phases.length > 0) {
         this.advanceToNextPhase();
         const nextPhase = this.getCurrentPhase();
-        if (nextPhase && nextPhase.type === "work") {
+        if (nextPhase) {
+          this.currentMode = nextPhase.type;
           this.timeRemaining = nextPhase.duration * 60;
-          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || "Work");
+          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.type, "(", nextPhase.duration, "min)");
+          if (nextPhase.type === "work") {
+            new import_obsidian2.Notice("Break is over! Time to work!");
+          } else {
+            const breakName = nextPhase.type === "longBreak" ? "Long Break" : "Short Break";
+            new import_obsidian2.Notice(`Starting ${breakName}!`);
+          }
         } else {
+          this.currentMode = "work";
           this.timeRemaining = this.getDurationForPhase("work") * 60;
           console.log("  \u2192 Fallback to default work duration");
+          new import_obsidian2.Notice("Break is over! Time to work!");
         }
       } else {
+        this.currentMode = "work";
         this.timeRemaining = this.getDurationForPhase("work") * 60;
+        new import_obsidian2.Notice("Break is over! Time to work!");
       }
-      new import_obsidian2.Notice("Break is over! Time to work!");
       await this.logSession("break_complete");
       this.playSound("ding");
       this.updateStatusBar();
@@ -3404,6 +4393,10 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
         this.isRunning = true;
         this.startTimer();
+        const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view && "resumeTaskTimer" in view) {
+          view.resumeTaskTimer();
+        }
       } else {
         console.log("  \u2192 Auto-start: NO - Waiting for manual start");
       }
@@ -3674,7 +4667,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     if (!this.settings.logFile) {
       return;
     }
-    const skipActions = ["resume", "pause", "plugin_unloaded", "reset"];
+    const skipActions = ["resume", "plugin_unloaded"];
     if (skipActions.includes(action)) {
       return;
     }
@@ -3733,6 +4726,37 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         logEntry += `   \u{1F4C5} ${timestamp}
 
 `;
+      } else if (action === "pause" || action === "reset") {
+        if (taskTime && taskTime !== "0:00" && this.currentMode === "work") {
+          const actionLabel = action === "pause" ? "\u23F8\uFE0F WORK PAUSED" : "\u23F9\uFE0F WORK STOPPED";
+          logEntry = `
+${actionLabel}
+`;
+          logEntry += `   \u{1F4C5} ${timestamp}
+`;
+          logEntry += `   \u{1F4CB} Kanban: ${kanbanFile}
+`;
+          logEntry += `   \u2713  Task: ${taskName}
+`;
+          logEntry += `   \u23F1\uFE0F  Task Time: ${taskTime}
+
+`;
+        }
+      } else if (action === "auto_progress") {
+        if (taskTime && taskTime !== "0:00") {
+          logEntry = `
+\u{1F4CA} WORK PROGRESS (auto-save)
+`;
+          logEntry += `   \u{1F4C5} ${timestamp}
+`;
+          logEntry += `   \u{1F4CB} Kanban: ${kanbanFile}
+`;
+          logEntry += `   \u2713  Task: ${taskName}
+`;
+          logEntry += `   \u23F1\uFE0F  Task Time: ${taskTime}
+
+`;
+        }
       }
       if (!logEntry) return;
       const { vault } = this.app;
@@ -3980,12 +5004,26 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Per-Board Progress Columns").setHeading();
-    new import_obsidian2.Setting(containerEl).setName("Progress Column Selection").setDesc("Configure preferred progress columns for each kanban board").addButton(
-      (button) => button.setButtonText("Configure Progress Columns").setCta().onClick(() => {
-        this.openProgressColumnConfig();
-      })
-    );
+    new import_obsidian2.Setting(containerEl).setName("Board Column & Schedule Configuration").setHeading();
+    const boardPath = this.plugin.settings.kanbanBoardPath;
+    if (boardPath) {
+      const boardName = boardPath.split("/").pop()?.replace(".md", "") || boardPath;
+      containerEl.createEl("p", {
+        text: `Configuring: ${boardName}`,
+        cls: "setting-item-description"
+      });
+      const boardConfigContainer = containerEl.createDiv("board-config-container");
+      boardConfigContainer.style.padding = "12px";
+      boardConfigContainer.style.background = "var(--background-secondary)";
+      boardConfigContainer.style.borderRadius = "8px";
+      boardConfigContainer.style.marginBottom = "16px";
+      this.renderBoardConfigInSettings(boardConfigContainer, boardPath);
+    } else {
+      containerEl.createEl("p", {
+        text: "Select a Kanban board in the sidebar to configure columns and schedule.",
+        cls: "setting-item-description"
+      });
+    }
     new import_obsidian2.Setting(containerEl).setName("Update timer in Kanban file").setDesc("Show task timer (\u{1F34E} 1:23) directly in Kanban file text").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.updateTaskTimerInFile).onChange(async (value) => {
         this.plugin.settings.updateTaskTimerInFile = value;
@@ -4001,6 +5039,12 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     new import_obsidian2.Setting(containerEl).setName("Schedule Summary Path").setDesc("Path to the schedule summary file").addText(
       (text) => text.setPlaceholder("Pomodoro Schedule Summary.md").setValue(this.plugin.settings.scheduleSummaryPath).onChange(async (value) => {
         this.plugin.settings.scheduleSummaryPath = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Include work time in Daily Note sync").setDesc("When syncing Kanban tasks to Daily Note, include work time calculations per task and totals").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.includeWorkTimeInSync).onChange(async (value) => {
+        this.plugin.settings.includeWorkTimeInSync = value;
         await this.plugin.saveSettings();
       })
     );
@@ -4160,6 +5204,18 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         }
       })
     );
+    new import_obsidian2.Setting(containerEl).setName("Mute All Sounds").setDesc("Turn off all timer sounds").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.muteSounds).onChange(async (value) => {
+        console.log("[Settings] Mute toggle changed to:", value);
+        this.plugin.settings.muteSounds = value;
+        console.log("[Settings] After setting, muteSounds is:", this.plugin.settings.muteSounds);
+        await this.plugin.saveSettings();
+        const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+        if (view && view.updateMuteButton) {
+          view.updateMuteButton();
+        }
+      })
+    );
     new import_obsidian2.Setting(containerEl).setName("Short Break Sound").setDesc("Three quick beeps at 693Hz").addButton(
       (button) => button.setButtonText("Test").onClick(() => {
         this.plugin.playSound("shortbreak");
@@ -4231,6 +5287,384 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
   openProgressColumnConfig() {
     const modal = new ProgressColumnConfigModal(this.app, this.plugin);
     modal.open();
+  }
+  // Render board configuration directly in settings (no popup)
+  renderBoardConfigInSettings(container, boardPath) {
+    container.empty();
+    container.createEl("h4", { text: "\u{1F3AF} Main Column Mapping" });
+    container.createEl("p", {
+      text: "Define which columns serve as Todo/Progress/Done.",
+      cls: "setting-item-description"
+    });
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath] || { todo: "", progress: "", done: "" };
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const currentOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath] || [...defaultColumns];
+    const allColumns = ["", ...currentOrder, "Backlog", "Review", "Blocked", "Archive"].filter((v, i, a) => a.indexOf(v) === i);
+    const todoSetting = new import_obsidian2.Setting(container).setName("\u{1F4CB} Todo Column").addDropdown((dropdown) => {
+      allColumns.forEach((col) => dropdown.addOption(col, col || "(auto-detect)"));
+      dropdown.setValue(mainColumns.todo);
+      dropdown.onChange(async (value) => {
+        await this.updateMainColumnMapping(boardPath, "todo", value);
+        this.renderBoardConfigInSettings(container, boardPath);
+      });
+    });
+    const progressSetting = new import_obsidian2.Setting(container).setName("\u{1F6A7} Progress Column").addDropdown((dropdown) => {
+      allColumns.forEach((col) => dropdown.addOption(col, col || "(auto-detect)"));
+      dropdown.setValue(mainColumns.progress);
+      dropdown.onChange(async (value) => {
+        await this.updateMainColumnMapping(boardPath, "progress", value);
+        this.renderBoardConfigInSettings(container, boardPath);
+      });
+    });
+    const doneSetting = new import_obsidian2.Setting(container).setName("\u2705 Done Column").addDropdown((dropdown) => {
+      allColumns.forEach((col) => dropdown.addOption(col, col || "(auto-detect)"));
+      dropdown.setValue(mainColumns.done);
+      dropdown.onChange(async (value) => {
+        await this.updateMainColumnMapping(boardPath, "done", value);
+        this.renderBoardConfigInSettings(container, boardPath);
+      });
+    });
+    container.createEl("hr");
+    container.createEl("h4", { text: "\u{1F500} Column Order" });
+    container.createEl("p", {
+      text: "Reorder columns using arrow buttons. Active columns appear in sidebar.",
+      cls: "setting-item-description"
+    });
+    const activeChipsArea = container.createDiv("chips-area-inline");
+    activeChipsArea.style.display = "flex";
+    activeChipsArea.style.flexWrap = "wrap";
+    activeChipsArea.style.gap = "8px";
+    activeChipsArea.style.marginBottom = "12px";
+    currentOrder.forEach((col, index) => {
+      const chipWrapper = activeChipsArea.createDiv("chip-wrapper-inline");
+      chipWrapper.style.display = "flex";
+      chipWrapper.style.alignItems = "center";
+      chipWrapper.style.gap = "4px";
+      const chip = chipWrapper.createDiv("column-chip-inline");
+      chip.style.padding = "4px 8px";
+      chip.style.background = "var(--interactive-accent)";
+      chip.style.color = "var(--text-on-accent)";
+      chip.style.borderRadius = "12px";
+      chip.style.fontSize = "0.85em";
+      chip.textContent = col;
+      const arrowContainer = chipWrapper.createDiv("chip-arrows-inline");
+      arrowContainer.style.display = "flex";
+      arrowContainer.style.gap = "2px";
+      if (index > 0) {
+        const leftBtn = arrowContainer.createEl("button", { text: "\u25C0", cls: "chip-arrow-btn" });
+        leftBtn.style.padding = "2px 6px";
+        leftBtn.style.fontSize = "0.7em";
+        leftBtn.style.cursor = "pointer";
+        leftBtn.onclick = async () => {
+          await this.moveColumnInOrder(boardPath, index, index - 1);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      }
+      if (index < currentOrder.length - 1) {
+        const rightBtn = arrowContainer.createEl("button", { text: "\u25B6", cls: "chip-arrow-btn" });
+        rightBtn.style.padding = "2px 6px";
+        rightBtn.style.fontSize = "0.7em";
+        rightBtn.style.cursor = "pointer";
+        rightBtn.onclick = async () => {
+          await this.moveColumnInOrder(boardPath, index, index + 1);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      }
+      const removeBtn = chipWrapper.createEl("button", { text: "\u2715", cls: "chip-remove-btn" });
+      removeBtn.style.padding = "2px 6px";
+      removeBtn.style.fontSize = "0.7em";
+      removeBtn.style.cursor = "pointer";
+      removeBtn.style.color = "var(--text-error)";
+      removeBtn.onclick = async () => {
+        await this.removeColumnFromOrder(boardPath, index);
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    });
+    const allPossibleColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done", "Backlog", "Review", "Blocked", "Archive"];
+    const unusedColumns = allPossibleColumns.filter((col) => !currentOrder.includes(col));
+    if (unusedColumns.length > 0) {
+      container.createEl("p", { text: "Unused columns (click to add):", cls: "setting-item-description" });
+      const unusedArea = container.createDiv("unused-chips-inline");
+      unusedArea.style.display = "flex";
+      unusedArea.style.flexWrap = "wrap";
+      unusedArea.style.gap = "8px";
+      unusedArea.style.marginBottom = "12px";
+      unusedColumns.forEach((col) => {
+        const chip = unusedArea.createDiv("column-chip-unused");
+        chip.style.padding = "4px 8px";
+        chip.style.background = "var(--background-modifier-border)";
+        chip.style.borderRadius = "12px";
+        chip.style.fontSize = "0.85em";
+        chip.style.cursor = "pointer";
+        chip.textContent = col;
+        chip.onclick = async () => {
+          await this.addColumnToOrder(boardPath, col);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      });
+    }
+    container.createEl("hr");
+    container.createEl("h4", { text: "\u23F1\uFE0F Custom Schedule" });
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    container.createEl("p", {
+      text: `Global: ${currentSchedule.name} (\u{1F345}${currentSchedule.workDuration || 25}m \u2615${currentSchedule.shortBreakDuration || 5}m \u{1F334}${currentSchedule.longBreakDuration || 15}m)`,
+      cls: "setting-item-description"
+    });
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      container.createEl("p", { text: "Board schedule:", cls: "setting-item-description" });
+      const scheduleArea = container.createDiv("schedule-chips-inline");
+      scheduleArea.style.display = "flex";
+      scheduleArea.style.flexWrap = "wrap";
+      scheduleArea.style.gap = "8px";
+      scheduleArea.style.marginBottom = "12px";
+      boardSchedule.phases.forEach((phase, index) => {
+        const chipWrapper = scheduleArea.createDiv("schedule-chip-wrapper");
+        chipWrapper.style.display = "flex";
+        chipWrapper.style.alignItems = "center";
+        chipWrapper.style.gap = "4px";
+        const arrowContainer = chipWrapper.createDiv("phase-arrows");
+        arrowContainer.style.display = "flex";
+        arrowContainer.style.flexDirection = "column";
+        arrowContainer.style.gap = "1px";
+        if (index > 0) {
+          const leftBtn = arrowContainer.createEl("button", { text: "\u25C0", cls: "phase-arrow-btn" });
+          leftBtn.style.padding = "1px 4px";
+          leftBtn.style.fontSize = "0.6em";
+          leftBtn.style.cursor = "pointer";
+          leftBtn.style.lineHeight = "1";
+          leftBtn.onclick = async () => {
+            await this.movePhaseInSchedule(boardPath, index, index - 1);
+            this.renderBoardConfigInSettings(container, boardPath);
+          };
+        }
+        if (index < boardSchedule.phases.length - 1) {
+          const rightBtn = arrowContainer.createEl("button", { text: "\u25B6", cls: "phase-arrow-btn" });
+          rightBtn.style.padding = "1px 4px";
+          rightBtn.style.fontSize = "0.6em";
+          rightBtn.style.cursor = "pointer";
+          rightBtn.style.lineHeight = "1";
+          rightBtn.onclick = async () => {
+            await this.movePhaseInSchedule(boardPath, index, index + 1);
+            this.renderBoardConfigInSettings(container, boardPath);
+          };
+        }
+        const chip = chipWrapper.createDiv("schedule-chip-inline");
+        chip.style.padding = "4px 8px";
+        chip.style.background = phase.type === "Work" ? "var(--text-error-bg)" : "var(--text-success-bg)";
+        chip.style.borderRadius = "12px";
+        chip.style.fontSize = "0.85em";
+        chip.style.display = "flex";
+        chip.style.alignItems = "center";
+        chip.style.gap = "4px";
+        const icon = phase.type === "Work" ? "\u{1F345}" : phase.type === "Short Break" ? "\u2615" : "\u{1F334}";
+        chip.innerHTML = `${icon} ${phase.type}: ${phase.duration}m`;
+        const editBtn = chip.createEl("button", { text: "\u270F\uFE0F", cls: "chip-edit-btn" });
+        editBtn.style.padding = "0 4px";
+        editBtn.style.fontSize = "0.8em";
+        editBtn.style.cursor = "pointer";
+        editBtn.onclick = () => {
+          new InputModal(
+            this.app,
+            `Edit ${phase.type} Duration`,
+            "Duration in minutes",
+            phase.duration.toString(),
+            async (newDuration) => {
+              if (newDuration && !isNaN(parseInt(newDuration))) {
+                await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
+                this.renderBoardConfigInSettings(container, boardPath);
+              }
+            }
+          ).open();
+        };
+        const deleteBtn = chip.createEl("button", { text: "\u2715", cls: "chip-delete-btn" });
+        deleteBtn.style.padding = "0 4px";
+        deleteBtn.style.fontSize = "0.8em";
+        deleteBtn.style.cursor = "pointer";
+        deleteBtn.style.color = "var(--text-error)";
+        deleteBtn.onclick = async () => {
+          await this.removePhaseFromSchedule(boardPath, index);
+          this.renderBoardConfigInSettings(container, boardPath);
+        };
+      });
+      const clearBtn = container.createEl("button", { text: "\u{1F5D1}\uFE0F Clear Board Schedule", cls: "clear-schedule-btn" });
+      clearBtn.style.marginBottom = "12px";
+      clearBtn.onclick = async () => {
+        delete this.plugin.settings.perBoardSchedule[boardPath];
+        await this.plugin.saveSettings();
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    } else {
+      container.createEl("p", { text: "No custom schedule. Using global schedule.", cls: "setting-item-description" });
+    }
+    const addPhaseArea = container.createDiv("add-phase-inline");
+    addPhaseArea.style.display = "flex";
+    addPhaseArea.style.gap = "8px";
+    addPhaseArea.style.flexWrap = "wrap";
+    const phaseTypes = [
+      { type: "Work", duration: 25, icon: "\u{1F345}" },
+      { type: "Short Break", duration: 5, icon: "\u2615" },
+      { type: "Long Break", duration: 15, icon: "\u{1F334}" }
+    ];
+    phaseTypes.forEach(({ type, duration, icon }) => {
+      const btn = addPhaseArea.createEl("button", { text: `${icon} Add ${type}`, cls: "add-phase-btn" });
+      btn.onclick = async () => {
+        await this.addPhaseToSchedule(boardPath, type, duration);
+        this.renderBoardConfigInSettings(container, boardPath);
+      };
+    });
+  }
+  // Helper methods for board config
+  async updateMainColumnMapping(boardPath, columnType, columnName) {
+    if (!this.plugin.settings.perBoardMainColumns) {
+      this.plugin.settings.perBoardMainColumns = {};
+    }
+    if (!this.plugin.settings.perBoardMainColumns[boardPath]) {
+      this.plugin.settings.perBoardMainColumns[boardPath] = { todo: "", progress: "", done: "" };
+    }
+    this.plugin.settings.perBoardMainColumns[boardPath][columnType] = columnName;
+    if (columnName && !this.plugin.settings.perBoardColumnOrder?.[boardPath]?.includes(columnName)) {
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      if (!this.plugin.settings.perBoardColumnOrder[boardPath]) {
+        this.plugin.settings.perBoardColumnOrder[boardPath] = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+      }
+      this.plugin.settings.perBoardColumnOrder[boardPath].push(columnName);
+      await this.addColumnToKanbanFile(boardPath, columnName);
+    }
+    await this.plugin.saveSettings();
+    console.log("[SETTINGS] Updated main column mapping:", columnType, "=", columnName, "for", boardPath);
+    this.refreshSidebarAfterSettingsChange();
+  }
+  async moveColumnInOrder(boardPath, fromIndex, toIndex) {
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const order = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
+    if (toIndex < 0 || toIndex >= order.length) return;
+    const [removed] = order.splice(fromIndex, 1);
+    order.splice(toIndex, 0, removed);
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    console.log("[SETTINGS] Moved column in order for", boardPath, ":", order);
+    this.refreshSidebarAfterSettingsChange();
+  }
+  async removeColumnFromOrder(boardPath, index) {
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const order = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
+    if (order.length <= 1) return;
+    order.splice(index, 1);
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    this.refreshSidebarAfterSettingsChange();
+  }
+  async addColumnToOrder(boardPath, columnName) {
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const order = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
+    if (!order.includes(columnName)) {
+      order.push(columnName);
+      await this.addColumnToKanbanFile(boardPath, columnName);
+    }
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = order;
+    await this.plugin.saveSettings();
+    this.refreshSidebarAfterSettingsChange();
+  }
+  async addPhaseToSchedule(boardPath, type, duration) {
+    if (!this.plugin.settings.perBoardSchedule) {
+      this.plugin.settings.perBoardSchedule = {};
+    }
+    if (!this.plugin.settings.perBoardSchedule[boardPath]) {
+      this.plugin.settings.perBoardSchedule[boardPath] = { name: "Custom", phases: [] };
+    }
+    this.plugin.settings.perBoardSchedule[boardPath].phases.push({ type, duration });
+    await this.plugin.saveSettings();
+    await this.plugin.resetTimer();
+    this.refreshSidebarAfterSettingsChange();
+  }
+  async updatePhaseDuration(boardPath, index, duration) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases?.[index]) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases[index].duration = duration;
+      await this.plugin.saveSettings();
+      await this.plugin.resetTimer();
+      this.refreshSidebarAfterSettingsChange();
+    }
+  }
+  async removePhaseFromSchedule(boardPath, index) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases.splice(index, 1);
+      await this.plugin.saveSettings();
+      await this.plugin.resetTimer();
+      this.refreshSidebarAfterSettingsChange();
+    }
+  }
+  async movePhaseInSchedule(boardPath, fromIndex, toIndex) {
+    const phases = this.plugin.settings.perBoardSchedule?.[boardPath]?.phases;
+    if (!phases || toIndex < 0 || toIndex >= phases.length) return;
+    const [removed] = phases.splice(fromIndex, 1);
+    phases.splice(toIndex, 0, removed);
+    await this.plugin.saveSettings();
+    await this.plugin.resetTimer();
+    this.refreshSidebarAfterSettingsChange();
+  }
+  // Refresh sidebar when settings change
+  refreshSidebarAfterSettingsChange() {
+    const timerView = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
+    if (timerView && timerView.refreshView) {
+      timerView.refreshView();
+    }
+  }
+  /**
+   * Add a new column to the Kanban file if it doesn't exist
+   */
+  async addColumnToKanbanFile(boardPath, columnName) {
+    try {
+      const file = this.app.vault.getAbstractFileByPath(boardPath);
+      if (!(file instanceof import_obsidian2.TFile)) {
+        console.warn("[KANBAN] File not found:", boardPath);
+        return false;
+      }
+      const content = await this.app.vault.read(file);
+      const normalizedColumnName = columnName.replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim().toLowerCase();
+      const lines = content.split("\n");
+      for (const line of lines) {
+        const headerMatch = line.match(/^##\s+(.+)/);
+        if (headerMatch) {
+          const existingColumn = headerMatch[1].replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim().toLowerCase();
+          if (existingColumn === normalizedColumnName) {
+            console.log("[KANBAN] Column already exists:", columnName);
+            return false;
+          }
+        }
+      }
+      let insertIndex = lines.length;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes("kanban-plugin:") || lines[i].startsWith("%% ")) {
+          insertIndex = i;
+        } else if (lines[i].trim() !== "") {
+          break;
+        }
+      }
+      const newColumnContent = `
+## ${columnName}
+`;
+      lines.splice(insertIndex, 0, newColumnContent);
+      await this.app.vault.modify(file, lines.join("\n"));
+      console.log("[KANBAN] Added new column:", columnName, "to", boardPath);
+      new import_obsidian2.Notice(`Added column "${columnName}" to Kanban board`);
+      return true;
+    } catch (error) {
+      console.error("[KANBAN] Error adding column:", error);
+      new import_obsidian2.Notice(`Failed to add column: ${error}`);
+      return false;
+    }
   }
 };
 var ScheduleNameModal = class extends import_obsidian2.Modal {
@@ -4437,6 +5871,56 @@ var ScheduleEditModal = class extends import_obsidian2.Modal {
     contentEl.empty();
   }
 };
+var InputModal = class extends import_obsidian2.Modal {
+  constructor(app, title, placeholder, defaultValue, onSubmit) {
+    super(app);
+    this.title = title;
+    this.placeholder = placeholder;
+    this.defaultValue = defaultValue;
+    this.onSubmit = onSubmit;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+    const inputEl = contentEl.createEl("input", {
+      type: "number",
+      placeholder: this.placeholder,
+      value: this.defaultValue
+    });
+    inputEl.style.width = "100%";
+    inputEl.style.padding = "8px";
+    inputEl.style.marginBottom = "12px";
+    inputEl.focus();
+    inputEl.select();
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.gap = "10px";
+    buttonContainer.style.justifyContent = "flex-end";
+    const cancelButton = buttonContainer.createEl("button", { text: "Cancel" });
+    cancelButton.onclick = () => {
+      this.onSubmit(null);
+      this.close();
+    };
+    const confirmButton = buttonContainer.createEl("button", { text: "Save", cls: "mod-cta" });
+    confirmButton.onclick = () => {
+      this.onSubmit(inputEl.value);
+      this.close();
+    };
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        this.onSubmit(inputEl.value);
+        this.close();
+      } else if (e.key === "Escape") {
+        this.onSubmit(null);
+        this.close();
+      }
+    });
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
 var ConfirmModal = class extends import_obsidian2.Modal {
   constructor(app, message, onConfirm, onCancel) {
     super(app);
@@ -4478,50 +5962,611 @@ var ConfirmModal = class extends import_obsidian2.Modal {
 var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
   constructor(app, plugin) {
     super(app);
+    this.draggedChip = null;
+    this.currentBoardPath = "";
     this.plugin = plugin;
   }
   onOpen() {
+    console.log("[PROGRESS MODAL] Opening new chips-based modal");
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "Progress Column Configuration" });
+    contentEl.addClass("column-config-modal");
+    this.addStyles();
+    console.log("[PROGRESS MODAL] Creating header and content");
+    contentEl.createEl("h2", { text: "\u{1F4CB} Column & Schedule Configuration" });
     contentEl.createEl("p", {
-      text: 'Configure which column to use as the "In Progress" column for each kanban board. This helps when boards have multiple progress-like columns.'
+      text: 'Drag chips to reorder columns. Drag to the "Unused" area to disable a column.',
+      cls: "modal-description"
     });
-    const container = contentEl.createDiv("progress-column-config");
-    const kanbanFiles = Object.keys(this.plugin.settings.perBoardProgressColumns || {});
-    if (kanbanFiles.length === 0) {
-      const emptyState = container.createDiv("empty-state");
-      emptyState.createEl("p", { text: "No kanban boards configured yet. Use kanban boards first to set up progress column preferences." });
-    } else {
-      kanbanFiles.forEach((boardPath) => {
-        const boardSetting = new import_obsidian2.Setting(container).setName(boardPath).setDesc("Progress column for this board").addText(
-          (text) => text.setPlaceholder("In Progress").setValue(this.plugin.settings.perBoardProgressColumns[boardPath] || "").onChange(async (value) => {
-            this.plugin.settings.perBoardProgressColumns[boardPath] = value;
-            await this.plugin.saveSettings();
-          })
-        );
-        boardSetting.addButton(
-          (button) => button.setButtonText("Remove").setWarning().onClick(async () => {
-            delete this.plugin.settings.perBoardProgressColumns[boardPath];
-            await this.plugin.saveSettings();
-            this.onOpen();
-          })
-        );
-      });
+    const boardSelector = contentEl.createDiv("board-selector");
+    boardSelector.createEl("label", { text: "Select Kanban Board:" });
+    const select = boardSelector.createEl("select", { cls: "board-select" });
+    const defaultOption = select.createEl("option", { value: "", text: "-- Select a board --" });
+    const knownBoards = /* @__PURE__ */ new Set([
+      ...Object.keys(this.plugin.settings.perBoardProgressColumns || {}),
+      ...Object.keys(this.plugin.settings.perBoardColumnOrder || {}),
+      ...Object.keys(this.plugin.settings.perBoardSchedule || {})
+    ]);
+    if (this.plugin.settings.kanbanBoardPath) {
+      knownBoards.add(this.plugin.settings.kanbanBoardPath);
     }
-    const instructions = contentEl.createDiv("instructions");
-    instructions.createEl("h3", { text: "How to use:" });
-    instructions.createEl("ol", {}, (ol) => {
-      ol.createEl("li", { text: "Use kanban boards with multiple progress columns" });
-      ol.createEl("li", { text: "When prompted, select your preferred progress column" });
-      ol.createEl("li", { text: "Or configure manually here" });
-      ol.createEl("li", { text: "The plugin will remember your choice for each board" });
+    knownBoards.forEach((boardPath) => {
+      const displayName = boardPath.split("/").pop()?.replace(".md", "") || boardPath;
+      select.createEl("option", { value: boardPath, text: displayName });
     });
+    const configContainer = contentEl.createDiv("config-container");
+    configContainer.style.display = "none";
+    select.onchange = () => {
+      this.currentBoardPath = select.value;
+      if (select.value) {
+        configContainer.style.display = "block";
+        this.renderBoardConfig(configContainer, select.value);
+      } else {
+        configContainer.style.display = "none";
+      }
+    };
+    if (this.plugin.settings.kanbanBoardPath) {
+      select.value = this.plugin.settings.kanbanBoardPath;
+      this.currentBoardPath = this.plugin.settings.kanbanBoardPath;
+      configContainer.style.display = "block";
+      this.renderBoardConfig(configContainer, this.plugin.settings.kanbanBoardPath);
+    }
     const buttonContainer = contentEl.createDiv("modal-button-container");
-    buttonContainer.style.marginTop = "20px";
-    buttonContainer.style.textAlign = "right";
-    const closeButton = buttonContainer.createEl("button", { text: "Close" });
+    const closeButton = buttonContainer.createEl("button", { text: "Close", cls: "mod-cta" });
     closeButton.onclick = () => this.close();
+  }
+  renderBoardConfig(container, boardPath) {
+    container.empty();
+    container.createEl("h3", { text: "\u{1F3AF} Main Column Mapping" });
+    container.createEl("p", { text: "Define which columns serve as the main Todo/Progress/Done columns for this board.", cls: "section-desc" });
+    const mainColumnsArea = container.createDiv("main-columns-area");
+    const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath] || { todo: "", progress: "", done: "" };
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const currentOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath] || [...defaultColumns];
+    const allColumns = ["", ...currentOrder, "Backlog", "Review", "Blocked", "Archive"].filter((v, i, a) => a.indexOf(v) === i);
+    const todoRow = mainColumnsArea.createDiv("main-column-row");
+    todoRow.createEl("label", { text: "\u{1F4CB} Todo Column:" });
+    const todoSelect = todoRow.createEl("select", { cls: "main-column-select" });
+    allColumns.forEach((col) => {
+      const opt = todoSelect.createEl("option", { value: col, text: col || "(auto-detect)" });
+      if (col === mainColumns.todo) opt.selected = true;
+    });
+    todoSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, "todo", todoSelect.value);
+      this.renderBoardConfig(container, boardPath);
+    };
+    const progressRow = mainColumnsArea.createDiv("main-column-row");
+    progressRow.createEl("label", { text: "\u{1F6A7} Progress Column:" });
+    const progressSelect = progressRow.createEl("select", { cls: "main-column-select" });
+    allColumns.forEach((col) => {
+      const opt = progressSelect.createEl("option", { value: col, text: col || "(auto-detect)" });
+      if (col === mainColumns.progress) opt.selected = true;
+    });
+    progressSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, "progress", progressSelect.value);
+      this.renderBoardConfig(container, boardPath);
+    };
+    const doneRow = mainColumnsArea.createDiv("main-column-row");
+    doneRow.createEl("label", { text: "\u2705 Done Column:" });
+    const doneSelect = doneRow.createEl("select", { cls: "main-column-select" });
+    allColumns.forEach((col) => {
+      const opt = doneSelect.createEl("option", { value: col, text: col || "(auto-detect)" });
+      if (col === mainColumns.done) opt.selected = true;
+    });
+    doneSelect.onchange = async () => {
+      await this.updateMainColumnMapping(boardPath, "done", doneSelect.value);
+      this.renderBoardConfig(container, boardPath);
+    };
+    container.createEl("hr");
+    container.createEl("h3", { text: "\u{1F500} Column Order" });
+    container.createEl("p", { text: 'Drag to reorder or use arrow buttons. Drag to "Unused" to hide columns.', cls: "section-desc" });
+    const activeArea = container.createDiv("chips-area active-area");
+    activeArea.createEl("label", { text: "Active Columns (drag to reorder):" });
+    const activeChips = activeArea.createDiv("chips-container");
+    activeChips.setAttribute("data-area", "active");
+    currentOrder.forEach((col, index) => {
+      this.createChip(activeChips, col, index, "active", boardPath, currentOrder.length);
+    });
+    this.setupDropZone(activeChips, "active", boardPath);
+    const unusedArea = container.createDiv("chips-area unused-area");
+    unusedArea.createEl("label", { text: "Unused Columns (drag here to disable):" });
+    const unusedChips = unusedArea.createDiv("chips-container unused");
+    unusedChips.setAttribute("data-area", "unused");
+    const allPossibleColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done", "Backlog", "Review", "Blocked", "Archive"];
+    const unusedColumns = allPossibleColumns.filter((col) => !currentOrder.includes(col));
+    unusedColumns.forEach((col, index) => {
+      this.createChip(unusedChips, col, index, "unused", boardPath, unusedColumns.length);
+    });
+    this.setupDropZone(unusedChips, "unused", boardPath);
+    const addColumnContainer = container.createDiv("add-column-container");
+    const addInput = addColumnContainer.createEl("input", {
+      type: "text",
+      placeholder: "Add custom column name...",
+      cls: "add-column-input"
+    });
+    const addBtn = addColumnContainer.createEl("button", { text: "+ Add", cls: "add-column-btn" });
+    addBtn.onclick = async () => {
+      if (addInput.value.trim()) {
+        const newOrder = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns, addInput.value.trim()];
+        if (!this.plugin.settings.perBoardColumnOrder) {
+          this.plugin.settings.perBoardColumnOrder = {};
+        }
+        this.plugin.settings.perBoardColumnOrder[boardPath] = newOrder;
+        await this.plugin.saveSettings();
+        addInput.value = "";
+        this.renderBoardConfig(container, boardPath);
+      }
+    };
+    container.createEl("hr");
+    container.createEl("h3", { text: "\u23F1\uFE0F Custom Schedule for this Board" });
+    container.createEl("p", { text: "Define a custom work/break sequence for this board.", cls: "section-desc" });
+    const currentSchedule = this.plugin.getCurrentSchedule();
+    const defaultSchedule = container.createDiv("default-schedule");
+    defaultSchedule.createEl("label", { text: `Current Global Schedule (${currentSchedule.name}):` });
+    const defaultChipsRow = defaultSchedule.createDiv("schedule-chips-row readonly");
+    this.createScheduleChip(defaultChipsRow, "Work", currentSchedule.workDuration || 25, true);
+    this.createScheduleChip(defaultChipsRow, "Short Break", currentSchedule.shortBreakDuration || 5, true);
+    this.createScheduleChip(defaultChipsRow, "Work", currentSchedule.workDuration || 25, true);
+    this.createScheduleChip(defaultChipsRow, "Long Break", currentSchedule.longBreakDuration || 15, true);
+    const customSchedule = container.createDiv("custom-schedule");
+    customSchedule.createEl("label", { text: "Custom Schedule for this Board:" });
+    const customChipsRow = customSchedule.createDiv("schedule-chips-row");
+    customChipsRow.setAttribute("data-area", "schedule");
+    const boardSchedule = this.plugin.settings.perBoardSchedule?.[boardPath];
+    if (boardSchedule && boardSchedule.phases) {
+      boardSchedule.phases.forEach((phase, index) => {
+        this.createScheduleChip(customChipsRow, phase.type, phase.duration, false, index, boardPath);
+      });
+    } else {
+      customChipsRow.createEl("span", { text: "No custom schedule. Add phases below.", cls: "empty-schedule" });
+    }
+    const addPhaseContainer = container.createDiv("add-phase-container");
+    const phaseTypes = [
+      { type: "Work", defaultDuration: 25, icon: "\u{1F345}" },
+      { type: "Short Break", defaultDuration: 5, icon: "\u2615" },
+      { type: "Long Break", defaultDuration: 15, icon: "\u{1F334}" }
+    ];
+    phaseTypes.forEach((phase) => {
+      const btn = addPhaseContainer.createEl("button", {
+        text: `${phase.icon} + ${phase.type}`,
+        cls: "add-phase-btn"
+      });
+      btn.onclick = async () => {
+        await this.addPhaseToSchedule(boardPath, phase.type, phase.defaultDuration);
+        this.renderBoardConfig(container, boardPath);
+      };
+    });
+    if (boardSchedule && boardSchedule.phases && boardSchedule.phases.length > 0) {
+      const clearBtn = addPhaseContainer.createEl("button", { text: "\u{1F5D1}\uFE0F Clear", cls: "clear-schedule-btn" });
+      clearBtn.onclick = async () => {
+        delete this.plugin.settings.perBoardSchedule[boardPath];
+        await this.plugin.saveSettings();
+        this.renderBoardConfig(container, boardPath);
+      };
+    }
+  }
+  createChip(container, text, index, area, boardPath, totalCount) {
+    const chipWrapper = container.createDiv("chip-wrapper");
+    chipWrapper.setAttribute("data-index", index.toString());
+    const chip = chipWrapper.createDiv("chip");
+    chip.innerHTML = `<span class="chip-text">${text}</span>`;
+    chip.setAttribute("draggable", "true");
+    chip.setAttribute("data-text", text);
+    chip.setAttribute("data-index", index.toString());
+    chip.setAttribute("data-area", area);
+    if (area === "active") {
+      const btnContainer = chipWrapper.createDiv("chip-arrows");
+      const leftBtn = btnContainer.createEl("button", { text: "\u25C0", cls: "chip-arrow-btn" });
+      leftBtn.disabled = index === 0;
+      leftBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.moveChip(boardPath, index, index - 1);
+      };
+      const rightBtn = btnContainer.createEl("button", { text: "\u25B6", cls: "chip-arrow-btn" });
+      rightBtn.disabled = index === totalCount - 1;
+      rightBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.moveChip(boardPath, index, index + 1);
+      };
+    }
+    chip.ondragstart = (e) => {
+      this.draggedChip = chip;
+      chip.addClass("dragging");
+      e.dataTransfer?.setData("text/plain", text);
+    };
+    chip.ondragend = () => {
+      chip.removeClass("dragging");
+      this.draggedChip = null;
+      container.querySelectorAll(".drop-indicator").forEach((el) => el.remove());
+    };
+  }
+  async moveChip(boardPath, fromIndex, toIndex) {
+    console.log("[COLUMN ORDER] moveChip called for board:", boardPath);
+    const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+    const activeOrder = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
+    if (toIndex < 0 || toIndex >= activeOrder.length) return;
+    const [removed] = activeOrder.splice(fromIndex, 1);
+    activeOrder.splice(toIndex, 0, removed);
+    if (!this.plugin.settings.perBoardColumnOrder) {
+      this.plugin.settings.perBoardColumnOrder = {};
+    }
+    this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
+    console.log("[COLUMN ORDER] Saving order for board:", boardPath, activeOrder);
+    await this.plugin.saveSettings();
+    console.log("[COLUMN ORDER] All board orders:", JSON.stringify(this.plugin.settings.perBoardColumnOrder));
+    const configContainer = document.querySelector(".config-container");
+    if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+  }
+  createScheduleChip(container, type, duration, readonly, index, boardPath) {
+    const chip = container.createDiv("schedule-chip");
+    const icon = type === "Work" ? "\u{1F345}" : type === "Short Break" ? "\u2615" : "\u{1F334}";
+    chip.innerHTML = `${icon} <strong>${type}</strong>: ${duration}m`;
+    if (readonly) {
+      chip.addClass("readonly");
+    } else if (index !== void 0 && boardPath) {
+      const editBtn = chip.createEl("button", { text: "\u270F\uFE0F", cls: "chip-btn edit" });
+      editBtn.onclick = (e) => {
+        e.stopPropagation();
+        console.log("[SCHEDULE EDIT] Edit button clicked for", type, "at index", index);
+        new InputModal(
+          this.app,
+          `Edit ${type} Duration`,
+          "Duration in minutes",
+          duration.toString(),
+          async (newDuration) => {
+            console.log("[SCHEDULE EDIT] User entered:", newDuration);
+            if (newDuration && !isNaN(parseInt(newDuration))) {
+              console.log("[SCHEDULE EDIT] Updating duration to", parseInt(newDuration));
+              await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
+              const configContainer = container.closest(".config-container");
+              if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+            }
+          }
+        ).open();
+      };
+      const deleteBtn = chip.createEl("button", { text: "\u2715", cls: "chip-btn delete" });
+      deleteBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.removePhaseFromSchedule(boardPath, index);
+        const configContainer = container.closest(".config-container");
+        if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+      };
+    }
+  }
+  isMainColumn(columnName) {
+    const lowerName = columnName.toLowerCase();
+    const todoEquivalents = ["todo", "to do", "to-do", "backlog", "\u{1F4CB} to do"];
+    const progressEquivalents = ["in progress", "in-progress", "doing", "working", "\u{1F6A7} in progress"];
+    const doneEquivalents = ["done", "completed", "finished", "\u2705 done"];
+    return todoEquivalents.some((eq) => lowerName.includes(eq)) || progressEquivalents.some((eq) => lowerName.includes(eq)) || doneEquivalents.some((eq) => lowerName.includes(eq));
+  }
+  hasRequiredColumns(columns) {
+    const lowerColumns = columns.map((c) => c.toLowerCase());
+    const missing = [];
+    const hasTodo = lowerColumns.some((c) => c.includes("todo") || c.includes("to do") || c.includes("to-do") || c.includes("backlog"));
+    const hasProgress = lowerColumns.some((c) => c.includes("in progress") || c.includes("in-progress") || c.includes("doing") || c.includes("working"));
+    const hasDone = lowerColumns.some((c) => c.includes("done") || c.includes("completed") || c.includes("finished"));
+    if (!hasTodo) missing.push("To Do (or Backlog)");
+    if (!hasProgress) missing.push("In Progress");
+    if (!hasDone) missing.push("Done");
+    return { valid: missing.length === 0, missing };
+  }
+  setupDropZone(container, area, boardPath) {
+    container.ondragover = (e) => {
+      e.preventDefault();
+      container.addClass("drag-over");
+      if (area === "active" && this.draggedChip) {
+        const wrappers = Array.from(container.querySelectorAll(".chip-wrapper"));
+        const dropX = e.clientX;
+        container.querySelectorAll(".drop-indicator").forEach((el) => el.remove());
+        let insertBefore = null;
+        for (const wrapper of wrappers) {
+          const rect = wrapper.getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            insertBefore = wrapper;
+            break;
+          }
+        }
+        const indicator = document.createElement("div");
+        indicator.className = "drop-indicator";
+        if (insertBefore) {
+          container.insertBefore(indicator, insertBefore);
+        } else {
+          container.appendChild(indicator);
+        }
+      }
+    };
+    container.ondragleave = (e) => {
+      const relatedTarget = e.relatedTarget;
+      if (!container.contains(relatedTarget)) {
+        container.removeClass("drag-over");
+        container.querySelectorAll(".drop-indicator").forEach((el) => el.remove());
+      }
+    };
+    container.ondrop = async (e) => {
+      e.preventDefault();
+      container.removeClass("drag-over");
+      container.querySelectorAll(".drop-indicator").forEach((el) => el.remove());
+      if (!this.draggedChip) return;
+      const chipText = this.draggedChip.getAttribute("data-text") || "";
+      const fromArea = this.draggedChip.getAttribute("data-area") || "";
+      const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+      let activeOrder = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
+      if (area === "active" && fromArea === "unused") {
+        const wrappers = Array.from(container.querySelectorAll(".chip-wrapper"));
+        const dropX = e.clientX;
+        let dropIndex = wrappers.length;
+        for (let i = 0; i < wrappers.length; i++) {
+          const rect = wrappers[i].getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            dropIndex = i;
+            break;
+          }
+        }
+        activeOrder.splice(dropIndex, 0, chipText);
+      } else if (area === "unused" && fromArea === "active") {
+        const newOrder = activeOrder.filter((col) => col !== chipText);
+        const validation = this.hasRequiredColumns(newOrder);
+        if (!validation.valid) {
+          const notice = document.createElement("div");
+          notice.className = "validation-warning";
+          notice.innerHTML = `\u26A0\uFE0F Cannot remove: Need at least one column for: ${validation.missing.join(", ")}`;
+          container.closest(".config-container")?.prepend(notice);
+          setTimeout(() => notice.remove(), 3e3);
+          return;
+        }
+        activeOrder = newOrder;
+      } else if (area === "active" && fromArea === "active") {
+        const dragIndex = parseInt(this.draggedChip.getAttribute("data-index") || "0");
+        const wrappers = Array.from(container.querySelectorAll(".chip-wrapper"));
+        const dropX = e.clientX;
+        let dropIndex = wrappers.length;
+        for (let i = 0; i < wrappers.length; i++) {
+          const rect = wrappers[i].getBoundingClientRect();
+          if (dropX < rect.left + rect.width / 2) {
+            dropIndex = i;
+            break;
+          }
+        }
+        const [removed] = activeOrder.splice(dragIndex, 1);
+        if (dropIndex > dragIndex) dropIndex--;
+        activeOrder.splice(dropIndex, 0, removed);
+      }
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
+      await this.plugin.saveSettings();
+      const configContainer = container.closest(".config-container");
+      if (configContainer) this.renderBoardConfig(configContainer, boardPath);
+    };
+  }
+  async updateMainColumnMapping(boardPath, columnType, columnName) {
+    console.log("[MAIN COLUMNS] updateMainColumnMapping called for board:", boardPath, "type:", columnType, "value:", columnName);
+    if (!this.plugin.settings.perBoardMainColumns) {
+      this.plugin.settings.perBoardMainColumns = {};
+    }
+    if (!this.plugin.settings.perBoardMainColumns[boardPath]) {
+      this.plugin.settings.perBoardMainColumns[boardPath] = { todo: "", progress: "", done: "" };
+    }
+    const oldColumnName = this.plugin.settings.perBoardMainColumns[boardPath][columnType];
+    this.plugin.settings.perBoardMainColumns[boardPath][columnType] = columnName;
+    if (columnName && !this.plugin.settings.perBoardColumnOrder?.[boardPath]?.includes(columnName)) {
+      if (!this.plugin.settings.perBoardColumnOrder) {
+        this.plugin.settings.perBoardColumnOrder = {};
+      }
+      if (!this.plugin.settings.perBoardColumnOrder[boardPath]) {
+        this.plugin.settings.perBoardColumnOrder[boardPath] = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
+      }
+      const order = this.plugin.settings.perBoardColumnOrder[boardPath];
+      if (columnType === "todo") {
+        order.unshift(columnName);
+      } else if (columnType === "progress") {
+        const insertIdx = Math.min(1, order.length);
+        order.splice(insertIdx, 0, columnName);
+      } else if (columnType === "done") {
+        order.push(columnName);
+      }
+      const defaultMap = { todo: "\u{1F4CB} To Do", progress: "\u{1F6A7} In Progress", done: "\u2705 Done" };
+      const defaultCol = defaultMap[columnType];
+      if (defaultCol && order.includes(defaultCol) && columnName !== defaultCol) {
+        const idx = order.indexOf(defaultCol);
+        if (idx !== -1) order.splice(idx, 1);
+      }
+    }
+    await this.plugin.saveSettings();
+    console.log("[MAIN COLUMNS] Updated", columnType, "to", columnName, "for board", boardPath);
+  }
+  async addPhaseToSchedule(boardPath, type, duration) {
+    if (!this.plugin.settings.perBoardSchedule) {
+      this.plugin.settings.perBoardSchedule = {};
+    }
+    if (!this.plugin.settings.perBoardSchedule[boardPath]) {
+      this.plugin.settings.perBoardSchedule[boardPath] = { name: "Custom", phases: [] };
+    }
+    this.plugin.settings.perBoardSchedule[boardPath].phases.push({ type, duration });
+    await this.plugin.saveSettings();
+  }
+  async updatePhaseDuration(boardPath, index, duration) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases?.[index]) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases[index].duration = duration;
+      await this.plugin.saveSettings();
+    }
+  }
+  async removePhaseFromSchedule(boardPath, index) {
+    if (this.plugin.settings.perBoardSchedule?.[boardPath]?.phases) {
+      this.plugin.settings.perBoardSchedule[boardPath].phases.splice(index, 1);
+      await this.plugin.saveSettings();
+    }
+  }
+  addStyles() {
+    const styleId = "column-config-modal-styles";
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      .column-config-modal { max-width: 600px; }
+      .column-config-modal .modal-description { color: var(--text-muted); margin-bottom: 16px; }
+      .column-config-modal .section-desc { color: var(--text-muted); font-size: 0.9em; margin: 4px 0 12px; }
+      
+      .board-selector { margin-bottom: 20px; }
+      .board-selector label { display: block; margin-bottom: 6px; font-weight: 600; }
+      .board-select { width: 100%; padding: 8px; border-radius: 4px; }
+      
+      .chips-area { margin-bottom: 16px; }
+      .chips-area label { display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-muted); }
+      
+      .chips-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        min-height: 44px;
+        padding: 12px;
+        border: 2px dashed var(--background-modifier-border);
+        border-radius: 8px;
+        background: var(--background-secondary);
+        align-items: flex-start;
+      }
+      .chips-container.unused { background: var(--background-secondary-alt); border-color: var(--text-faint); }
+      .chips-container.drag-over { border-color: var(--interactive-accent); background: var(--background-modifier-hover); }
+      
+      .chip-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+      }
+      
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 12px;
+        background: var(--interactive-accent);
+        color: var(--text-on-accent);
+        border-radius: 16px;
+        cursor: grab;
+        font-size: 0.9em;
+        transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+      }
+      .chip:hover { transform: scale(1.05); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+      .chip.dragging { opacity: 0.5; cursor: grabbing; }
+      .unused .chip { background: var(--background-modifier-border); color: var(--text-muted); }
+      .chip-text { pointer-events: none; }
+      
+      .chip-arrows {
+        display: flex;
+        gap: 2px;
+      }
+      .chip-arrow-btn {
+        background: var(--background-modifier-border);
+        border: none;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 0.7em;
+        cursor: pointer;
+        opacity: 0.7;
+        transition: opacity 0.15s, background 0.15s;
+      }
+      .chip-arrow-btn:hover:not(:disabled) { opacity: 1; background: var(--interactive-accent); color: var(--text-on-accent); }
+      .chip-arrow-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+      
+      .drop-indicator {
+        width: 3px;
+        height: 40px;
+        background: var(--interactive-accent);
+        border-radius: 2px;
+        animation: pulse 0.8s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      .validation-warning {
+        background: var(--background-modifier-error);
+        color: var(--text-on-accent);
+        padding: 10px 14px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        font-size: 0.9em;
+        animation: shake 0.3s ease-in-out;
+      }
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-5px); }
+        75% { transform: translateX(5px); }
+      }
+      
+      .main-columns-area { margin-bottom: 16px; }
+      .main-column-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .main-column-row label {
+        min-width: 140px;
+        font-weight: 500;
+      }
+      .main-column-select {
+        flex: 1;
+        padding: 6px 10px;
+        border-radius: 4px;
+        background: var(--background-secondary);
+        border: 1px solid var(--background-modifier-border);
+      }
+      
+      .add-column-container { display: flex; gap: 8px; margin-top: 8px; }
+      .add-column-input { flex: 1; padding: 6px 10px; border-radius: 4px; }
+      .add-column-btn { padding: 6px 12px; }
+      
+      .default-schedule, .custom-schedule { margin-bottom: 16px; }
+      .default-schedule label, .custom-schedule label { display: block; margin-bottom: 8px; font-weight: 500; }
+      
+      .schedule-chips-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px;
+        border-radius: 8px;
+        background: var(--background-secondary);
+        min-height: 40px;
+      }
+      .schedule-chips-row.readonly { opacity: 0.7; }
+      
+      .schedule-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: var(--background-modifier-border);
+        border-radius: 6px;
+        font-size: 0.85em;
+      }
+      .schedule-chip.readonly { background: var(--background-secondary-alt); }
+      .schedule-chip strong { margin: 0 2px; }
+      .chip-btn { 
+        background: transparent; 
+        border: none; 
+        cursor: pointer; 
+        padding: 2px 4px; 
+        font-size: 0.8em;
+        opacity: 0.6;
+      }
+      .chip-btn:hover { opacity: 1; }
+      .chip-btn.delete:hover { color: var(--text-error); }
+      
+      .add-phase-container { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .add-phase-btn { padding: 6px 12px; font-size: 0.85em; }
+      .clear-schedule-btn { background: var(--background-modifier-error); color: var(--text-on-accent); }
+      
+      .empty-schedule { color: var(--text-faint); font-style: italic; }
+      
+      .modal-button-container { margin-top: 24px; text-align: right; }
+      
+      hr { margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border); }
+    `;
+    document.head.appendChild(style);
   }
   onClose() {
     const { contentEl } = this;
