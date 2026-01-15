@@ -141,4 +141,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🐛 Issues & Feedback
 
-Found a bug or have a suggestion? Please open an issue on [GitHub](https://github.com/kirikou/obsidian-enhanced-pomodoro/issues).
+Found a bug or have a suggestion? Please open an issue on [GitHub](https://github.com/AdminCreaWeb/obsidian-enhanced-pomodoro/issues).

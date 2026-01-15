@@ -1,6 +1,62 @@
 # Enhanced Pomodoro Timer - Development Status
 
-## 🎯 Latest Update (Dec 15, 2025 - Major UX Improvements)
+## 🎯 Latest Update (Jan 8, 2026 - Custom Schedule & Settings Refactoring)
+**Major Features & Bug Fixes:**
+
+### ✅ **Custom Schedule System - Complete Overhaul**
+- **Per-Board Custom Schedules**: Each Kanban board can have its own schedule
+- **Flexible Phase Sequences**: Create any order (e.g., Work → Short → Long → Short → Work)
+- **Phase Reordering**: Arrow buttons (↑↓) to move phases up/down
+- **Break-to-Break Transitions**: Proper handling of consecutive breaks (Short → Long)
+- **Work-to-Work Wrap-Around**: Schedule cycles correctly when ending/starting with work
+- **Start with Any Phase**: Timer respects first phase (can start with break)
+- **Auto-Reset on Schedule Change**: Timer automatically resets when schedule is modified
+
+### ✅ **Settings Auto-Refresh - NEW**
+- **Immediate Board Config Display**: "Board Column & Schedule Configuration" section appears instantly after selecting a Kanban file
+- **No Manual Refresh Needed**: Settings tab auto-updates without closing/reopening
+
+### ✅ **Column Order & Mapping Fixes**
+- **Strict Column Order Respect**: Sidebar only shows columns in user-defined order
+- **Column Exclusions Work**: Removing a column from order actually hides it
+- **Main Column Mappings**: Todo/Progress/Done mappings properly applied
+- **Auto-Create Columns**: New columns added in settings are auto-created in Kanban file
+
+### ✅ **Mute Sounds Feature - NEW**
+- **Sidebar Mute Button**: Quick toggle in secondary controls (🔊/🔇 icon)
+- **Settings Toggle**: "Mute All Sounds" in Break Sounds section
+- **Sync Between Both**: Changes in either location update the other
+- **Default: Sounds ON**: Mute is off by default
+
+### 📋 **Quick Git Summary (Jan 8, 2026)**
+```bash
+# Custom Schedule & Settings Refactoring (Jan 8, 2026)
+feat: Per-board custom schedule with flexible phase sequences
+- Arrow buttons to reorder phases
+- Support any sequence (work/short/long in any order)
+- Break-to-break transitions handled correctly
+- Work-to-work wrap-around at cycle end
+
+feat: Timer respects first phase of custom schedule
+- Can start timer with break instead of work
+- Auto-reset when schedule is modified in settings
+
+feat: Settings auto-refresh on Kanban selection
+- Board config section appears immediately
+- No need to close/reopen settings
+
+feat: Mute all sounds toggle
+- Button in sidebar + toggle in settings
+- Synced between both locations
+
+fix: Column order strictly respected in sidebar
+- Excluded columns stay hidden
+- User-defined order maintained
+```
+
+---
+
+## 🎯 Previous Update (Dec 15, 2025 - Major UX Improvements)
 **New Features & UI Enhancements:**
 
 ### ✅ **Right-Click Context Menus - NEW**
