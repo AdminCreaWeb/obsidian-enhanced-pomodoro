@@ -131,6 +131,13 @@ Sessions are logged to `Pomodoro Log.md` (configurable):
    🎯 Task: Implement feature X
 ```
 
+## 📸 Screenshots
+
+![Kanban Board with Calendar Tasks](Screenshots/kanban-file_opened_as_kanban_board_with_sidebar_calendar_tasks_tabpage.png)
+![Manual Kanban Tab](Screenshots/kanban-file_opened_as_md_source_mode_with_sidebar_manual_kanban_tabpage.png)
+![Mini Calendar](Screenshots/sidebar_mini_calendar_tabpage.png)
+![How to Close Sidebar](Screenshots/sidebar_how_to_close.png)
+
 ## 🤝 Credits
 
 Based on [obsidian-pomodoro-timer](https://github.com/eatgrass/obsidian-pomodoro-timer) by eatgrass.

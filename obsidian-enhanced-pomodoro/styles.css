@@ -334,3 +334,29 @@
 .pomodoro-task-item:hover {
   background: rgba(255, 255, 255, 0.03);
 }
+
+/* Kanban Board Setting - Vertical Layout */
+.kanban-board-setting-vertical {
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+
+.kanban-board-setting-vertical .setting-item-info {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.kanban-board-setting-vertical .setting-item-control {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kanban-board-setting-vertical .kanban-settings-container {
+  flex: 1;
+}
+
+.kanban-board-setting-vertical .kanban-list select {
+  width: 100%;
+}

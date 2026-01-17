@@ -484,6 +484,11 @@ export default class CircularTimerView extends ItemView {
       this.loadMiniCalendarView();
     } else if (view === 'calendar-tasks') {
       this.loadCalendarTasksView();
+    } else if (view === 'manual') {
+      // Reload tasks when switching to Manual Kanban tab
+      if (this.plugin.settings.kanbanBoardPath) {
+        this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+      }
     }
     
     // Update task context display
@@ -573,7 +578,7 @@ export default class CircularTimerView extends ItemView {
       // Check if file already exists
       const existingFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
       if (existingFile instanceof TFile) {
-        console.log('[CALENDAR] Daily kanban file already exists:', dailyNotePath);
+        if (this.plugin.settings.debugMode) console.log('[CALENDAR] Daily kanban file already exists:', dailyNotePath);
         return;
       }
       
@@ -611,7 +616,7 @@ kanban-plugin: board
       
       // Create the file at the path returned by getDailyNotePath (consistent with existence check)
       await this.app.vault.create(dailyNotePath, content);
-      console.log('[CALENDAR] Created daily kanban file:', dailyNotePath);
+      if (this.plugin.settings.debugMode) console.log('[CALENDAR] Created daily kanban file:', dailyNotePath);
       
       // Refresh kanban boards list and load the new file
       await this.loadKanbanBoards();
@@ -797,7 +802,7 @@ kanban-plugin: board
         let timeSeconds = 0;
         // More flexible regex: matches " - 🍎 0:01" or " - 0:01" or just the time at end
         const timerMatch = text.match(/ - (?:🍎\s*)?(\d+):(\d{2})/) || text.match(/(\d+):(\d{2})$/);
-        console.log('[SYNC EXTRACT] Task text:', text, 'Timer match:', timerMatch);
+        if (this.plugin.settings.debugMode) console.log('[SYNC EXTRACT] Task text:', text, 'Timer match:', timerMatch);
         if (timerMatch) {
           const minutes = parseInt(timerMatch[1], 10);
           const seconds = parseInt(timerMatch[2], 10);
@@ -1219,7 +1224,7 @@ kanban-plugin: board
       onClick: () => {
         // Open settings tab for this plugin
         (this.app as any).setting.open();
-        (this.app as any).setting.openTabById('enhanced-pomodoro');
+        (this.app as any).setting.openTabById('enhanced-pomodoro-timer');
       }
     });
     
@@ -2344,17 +2349,17 @@ kanban-plugin: board
       // Get the task element to find its text
       const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
       if (!taskElement) {
-        console.log('[MOVE TASK] Task element not found for ID:', taskId);
+        if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Task element not found for ID:', taskId);
         return false;
       }
       
       const taskText = taskElement.querySelector('.task-text')?.textContent || '';
       if (!taskText) {
-        console.log('[MOVE TASK] Task text not found');
+        if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Task text not found');
         return false;
       }
 
-      console.log('[MOVE TASK] Looking for task:', taskText);
+      if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Looking for task:', taskText);
 
       const content = await this.app.vault.read(file);
       const lines = content.split('\n');
@@ -2393,7 +2398,7 @@ kanban-plugin: board
             if ((targetColumnType === 'progress' && this.isProgressColumn(currentColumn)) ||
                 (targetColumnType === 'done' && this.isDoneColumn(currentColumn))) {
               targetColumnIndex = i;
-              console.log('[MOVE TASK] Found target column:', currentColumn, 'at line', i);
+              if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Found target column:', currentColumn, 'at line', i);
             }
           }
         }
@@ -2409,7 +2414,7 @@ kanban-plugin: board
         if ((lineForMatch.startsWith('- [ ]') || lineForMatch.startsWith('- [x]')) && lineForMatch.includes(taskText)) {
           taskLine = rawLine; // Use original line with indentation
           taskLineIndex = i;
-          console.log('[MOVE TASK] Found task at line', i, ':', line);
+          if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Found task at line', i, ':', line);
         }
       }
       
@@ -2420,9 +2425,9 @@ kanban-plugin: board
         if (explicitColumn) {
           targetColumnIndex = explicitColumn.startIndex;
           targetColumnEndIndex = explicitColumn.endIndex;
-          console.log('[MOVE TASK] Using explicit target column:', explicitTargetColumnTitle, 'at line', targetColumnIndex);
+          if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Using explicit target column:', explicitTargetColumnTitle, 'at line', targetColumnIndex);
         } else {
-          console.log('[MOVE TASK] Explicit target column not found, falling back:', explicitTargetColumnTitle);
+          if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Explicit target column not found, falling back:', explicitTargetColumnTitle);
         }
       }
 
@@ -2431,7 +2436,7 @@ kanban-plugin: board
         const targetCol = columns.find(c => c.startIndex === targetColumnIndex);
         if (targetCol) {
           targetColumnEndIndex = targetCol.endIndex;
-          console.log('[MOVE TASK] Target column ends at line', targetColumnEndIndex);
+          if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Target column ends at line', targetColumnEndIndex);
         }
       }
       
@@ -2442,7 +2447,7 @@ kanban-plugin: board
       
       // Move the task if found
       if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
-        console.log('[MOVE TASK] Moving task:', {
+        if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Moving task:', {
           taskText,
           fromLine: taskLineIndex,
           toColumn: lines[targetColumnIndex],
@@ -2483,7 +2488,7 @@ kanban-plugin: board
         
         // Write back to file
         await this.app.vault.modify(file, lines.join('\n'));
-        console.log('[MOVE TASK] Task moved successfully to line', insertIndex);
+        if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Task moved successfully to line', insertIndex);
         
         // Small delay before reloading to ensure file is written
         setTimeout(async () => {
@@ -2495,7 +2500,7 @@ kanban-plugin: board
         return true;
       }
       
-      console.log('[MOVE TASK] Failed to move task:', {
+      if (this.plugin.settings.debugMode) console.log('[MOVE TASK] Failed to move task:', {
         taskFound: !!taskLine,
         taskIndex: taskLineIndex,
         targetFound: targetColumnIndex >= 0
@@ -2513,56 +2518,56 @@ kanban-plugin: board
   private async updateTaskInKanbanFile(taskId: string, timeString: string) {
     // Only update if feature is enabled
     if (!this.plugin.settings.updateTaskTimerInFile) {
-      console.log('[KANBAN UPDATE] Skipped: feature disabled');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Skipped: feature disabled');
       return;
     }
 
     // Only update while the work timer is actively running
     // This prevents selection/board switches (when timer is stopped) from spamming file writes
     if (!this.plugin.isRunning || this.plugin.currentMode !== 'work') {
-      console.log('[KANBAN UPDATE] Skipped: timer not running or not work mode');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Skipped: timer not running or not work mode');
       return;
     }
     
     // Don't update if timer is 0:00 (no time tracked)
     if (!timeString || timeString === '0:00') {
-      console.log('[KANBAN UPDATE] Skipped: timer is 0:00');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Skipped: timer is 0:00');
       return;
     }
     
     // Check if the timer value has actually changed
     const lastValue = this.lastUpdateTimerValue.get(taskId);
     if (lastValue === timeString) {
-      console.log('[KANBAN UPDATE] Skipped: value unchanged');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Skipped: value unchanged');
       return; // No change, don't update
     }
     
     // Debounce to avoid too frequent file updates
     const now = Date.now();
     if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
-      console.log('[KANBAN UPDATE] Skipped: debounce (', now - this.lastKanbanUpdateTime, 'ms since last)');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Skipped: debounce (', now - this.lastKanbanUpdateTime, 'ms since last)');
       return;
     }
     
-    console.log('[KANBAN UPDATE] Attempting update for task:', taskId, 'time:', timeString);
+    if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Attempting update for task:', taskId, 'time:', timeString);
     
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
       if (!boardPath) {
-        console.log('[KANBAN UPDATE] Failed: no boardPath');
+        if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Failed: no boardPath');
         return;
       }
       
       const file = this.app.vault.getAbstractFileByPath(boardPath);
       if (!(file instanceof TFile)) {
-        console.log('[KANBAN UPDATE] Failed: file not found at', boardPath);
+        if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Failed: file not found at', boardPath);
         return;
       }
       
       // Get task text from current element
       const taskText = this.currentTaskElement?.querySelector('.task-text')?.textContent;
       if (!taskText) {
-        console.log('[KANBAN UPDATE] Failed: no task text found');
+        if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Failed: no task text found');
         return;
       }
       
@@ -2588,7 +2593,7 @@ kanban-plugin: board
             // Update this line with new timer
             lines[i] = `${prefix}${taskText} - 🍎 ${timeString}`;
             updated = true;
-            console.log('[KANBAN UPDATE] Updated line:', lines[i]);
+            if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Updated line:', lines[i]);
             break;
           }
         }
@@ -2599,9 +2604,9 @@ kanban-plugin: board
         await this.app.vault.modify(file, lines.join('\n'));
         this.lastKanbanUpdateTime = Date.now();
         this.lastUpdateTimerValue.set(taskId, timeString);
-        console.log('[KANBAN UPDATE] Successfully wrote to file');
+        if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Successfully wrote to file');
       } else {
-        console.log('[KANBAN UPDATE] Task not found in file:', taskText);
+        if (this.plugin.settings.debugMode) console.log('[KANBAN UPDATE] Task not found in file:', taskText);
       }
       
     } catch (error) {
@@ -2636,13 +2641,13 @@ kanban-plugin: board
 
   private scrollToColumn(columnElement: HTMLElement) {
     if (!this.tasksContainer) {
-      console.log('[SCROLL] No tasks container found');
+      if (this.plugin.settings.debugMode) console.log('[SCROLL] No tasks container found');
       return;
     }
     
     // Ensure the container is scrollable
     const containerStyles = window.getComputedStyle(this.tasksContainer);
-    console.log('[SCROLL] Container overflow-x:', containerStyles.overflowX);
+    if (this.plugin.settings.debugMode) console.log('[SCROLL] Container overflow-x:', containerStyles.overflowX);
     
     // Force horizontal scroll if needed
     if (containerStyles.overflowX === 'visible') {
@@ -2653,7 +2658,7 @@ kanban-plugin: board
     setTimeout(() => {
       // Double-check container still exists
       if (!this.tasksContainer) {
-        console.log('[SCROLL] Tasks container no longer exists');
+        if (this.plugin.settings.debugMode) console.log('[SCROLL] Tasks container no longer exists');
         return;
       }
       
@@ -2677,7 +2682,7 @@ kanban-plugin: board
         this.tasksContainer.scrollLeft = finalScrollLeft;
       }
       
-      console.log('[SCROLL] Scrolling to column:', {
+      if (this.plugin.settings.debugMode) console.log('[SCROLL] Scrolling to column:', {
         columnLeft: columnElement.offsetLeft,
         scrollTo: finalScrollLeft,
         currentScroll: this.tasksContainer.scrollLeft,
@@ -2799,17 +2804,17 @@ kanban-plugin: board
       
       // Check if the selection was successful
       if (this.kanbanSelector.value === this.plugin.settings.kanbanBoardPath) {
-        console.log('[Kanban Startup] Restoring last active board:', this.plugin.settings.kanbanBoardPath);
+        if (this.plugin.settings.debugMode) console.log('[Kanban Startup] Restoring last active board:', this.plugin.settings.kanbanBoardPath);
         try {
           await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-          console.log('[Kanban Startup] Tasks loaded successfully');
+          if (this.plugin.settings.debugMode) console.log('[Kanban Startup] Tasks loaded successfully');
           // Update task context display after loading initial board
           this.updateTaskContextDisplay();
         } catch (error) {
           console.error('[Kanban Startup] Failed loading tasks:', error);
         }
       } else {
-        console.log('[Kanban Startup] Previous board no longer exists:', this.plugin.settings.kanbanBoardPath);
+        if (this.plugin.settings.debugMode) console.log('[Kanban Startup] Previous board no longer exists:', this.plugin.settings.kanbanBoardPath);
         // Clear the invalid path
         this.plugin.settings.kanbanBoardPath = '';
         await this.plugin.saveSettings();
@@ -2817,7 +2822,7 @@ kanban-plugin: board
         this.updateTaskContextDisplay();
       }
     } else {
-      console.log('[Kanban Startup] No previous board to restore');
+      if (this.plugin.settings.debugMode) console.log('[Kanban Startup] No previous board to restore');
     }
 
     // Handle board selection
@@ -2827,7 +2832,7 @@ kanban-plugin: board
         if (!selectedPath) return;
       
         console.log('═══════════════════════════════════════════════════════');
-        console.log('[KANBAN SELECTION] Changing Kanban board');
+        if (this.plugin.settings.debugMode) console.log('[KANBAN SELECTION] Changing Kanban board');
         console.log('  Previous Board:', this.plugin.settings.kanbanBoardPath || 'None');
         console.log('  New Board:', selectedPath);
         console.log('  Active Task Before Switch:', this.activeTaskId || 'None');
@@ -2897,6 +2902,10 @@ kanban-plugin: board
       this.refreshButton.addEventListener('click', async (e) => {
         e.stopPropagation();
         await this.loadKanbanBoards();
+        // Also reload tasks from the currently selected board
+        if (this.plugin.settings.kanbanBoardPath) {
+          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+        }
         if (this.plugin.refreshKanbanButtons) {
           this.plugin.refreshKanbanButtons(true);
         }
@@ -2941,12 +2950,12 @@ kanban-plugin: board
     
     // Prevent concurrent calls that could leave dropdown empty
     if (this.isLoadingKanbanBoards) {
-      console.log('[KANBAN LOAD] Already loading, skipping duplicate call');
+      if (this.plugin.settings.debugMode) console.log('[KANBAN LOAD] Already loading, skipping duplicate call');
       return;
     }
     
     this.isLoadingKanbanBoards = true;
-    console.log('[KANBAN LOAD] Loading Kanban boards...');
+    if (this.plugin.settings.debugMode) console.log('[KANBAN LOAD] Loading Kanban boards...');
     
     // Clear existing options except the default one
     while (this.kanbanSelector.options.length > 1) {
@@ -3309,13 +3318,13 @@ kanban-plugin: board
       const userColumnOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath];
       const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
       
-      console.log('[SIDEBAR COLUMNS] Board path:', boardPath);
-      console.log('[SIDEBAR COLUMNS] User column order:', userColumnOrder);
-      console.log('[SIDEBAR COLUMNS] Main columns mapping:', mainColumns);
-      console.log('[SIDEBAR COLUMNS] File columns:', allColumnNames);
+      if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Board path:', boardPath);
+      if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] User column order:', userColumnOrder);
+      if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Main columns mapping:', mainColumns);
+      if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] File columns:', allColumnNames);
       
       if (userColumnOrder && userColumnOrder.length > 0) {
-        console.log('[SIDEBAR COLUMNS] Using user column order');
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Using user column order');
         // Use user's configured order - only show columns that are in the active list
         // First add columns from user order that exist in the file
         sortedColumns = userColumnOrder.filter(col => 
@@ -3324,7 +3333,7 @@ kanban-plugin: board
             fileCol.includes(col) || col.includes(fileCol)
           )
         );
-        console.log('[SIDEBAR COLUMNS] After filter:', sortedColumns);
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] After filter:', sortedColumns);
         
         // Map user column names to actual file column names
         sortedColumns = sortedColumns.map(userCol => {
@@ -3334,17 +3343,17 @@ kanban-plugin: board
           );
           return matchingFileCol || userCol;
         });
-        console.log('[SIDEBAR COLUMNS] After mapping:', sortedColumns);
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] After mapping:', sortedColumns);
         
         // NOTE: We do NOT add back file columns that aren't in user order
         // This respects the user's explicit decision to exclude certain columns
-        console.log('[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):', sortedColumns);
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):', sortedColumns);
       } else if (allColumnNames.length > 0) {
-        console.log('[SIDEBAR COLUMNS] Using file order (no user config)');
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Using file order (no user config)');
         // Use original order from file
         sortedColumns = allColumnNames;
       } else {
-        console.log('[SIDEBAR COLUMNS] Using fallback sorting');
+        if (this.plugin.settings.debugMode) console.log('[SIDEBAR COLUMNS] Using fallback sorting');
         // Fallback: sort with incomplete first, then completed
         sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
           const aCompleted = this.isDoneColumn(a);
@@ -3504,12 +3513,12 @@ kanban-plugin: board
             if (checkbox.checked) {
               // Clear active task if this was it (prevent timer updates on completed task)
               if (this.activeTaskId === taskId) {
-                console.log('[TASK COMPLETE] Clearing active task as it was just completed');
+                if (this.plugin.settings.debugMode) console.log('[TASK COMPLETE] Clearing active task as it was just completed');
                 this.activeTaskId = null;
                 this.currentTaskElement = null;
               }
               
-              // Get the total time for this task
+              // Get the total time for this task BEFORE clearing
               const totalTime = this.taskTimers.get(taskId) || this.taskTimersByText.get(task.text) || 0;
               
               if (totalTime > 0) {
@@ -3524,6 +3533,14 @@ kanban-plugin: board
                 await this.updateTaskInKanbanFile(taskId, finalTimeStr);
               }
               
+              // Clear task logs and timers for this taskId to prevent carryover to new tasks
+              // (taskIds are index-based and get reused when tasks move)
+              if (this.plugin && 'clearTaskLogs' in this.plugin) {
+                (this.plugin as any).clearTaskLogs(taskId);
+              }
+              this.taskTimers.delete(taskId);
+              if (this.plugin.settings.debugMode) console.log('[TASK COMPLETE] Cleared logs and timer for taskId:', taskId);
+              
               // Auto-move to Done column if enabled
               if (this.plugin.settings.autoMoveToDone) {
                 const currentGroupEl = taskItem.closest('.pomodoro-task-group');
@@ -3533,16 +3550,16 @@ kanban-plugin: board
                 if (!this.isDoneColumn(currentColumnTitle)) {
                   // Store original column before moving to Done (for uncheck restore)
                   this.taskOriginalColumns.set(taskId, currentColumnTitle);
-                  console.log('[AUTO-MOVE] Storing original column for task:', currentColumnTitle);
+                  if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Storing original column for task:', currentColumnTitle);
                   
                   const doneColumns = this.findColumnsByType('done');
                   
                   if (doneColumns.length === 0) {
-                    console.log('[AUTO-MOVE] No Done column found');
+                    if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] No Done column found');
                     new Notice('No "Done" column found on this board.');
                   } else {
                     const doneTitle = doneColumns[0].title;
-                    console.log('[AUTO-MOVE] Moving completed task to Done column:', doneTitle);
+                    if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Moving completed task to Done column:', doneTitle);
                     
                     const moved = await this.moveTaskToColumn(taskId, 'done', doneTitle);
                     if (moved) {
@@ -3739,7 +3756,7 @@ kanban-plugin: board
     
     // Strip the count from the search title for matching
     const searchTitle = this.stripColumnCount(columnTitle);
-    console.log('[AUTO-SELECT] Looking for column (base name):', searchTitle);
+    if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] Looking for column (base name):', searchTitle);
     
     // Find all task groups
     const groups = Array.from(this.tasksContainer.querySelectorAll('.pomodoro-task-group'));
@@ -3751,13 +3768,13 @@ kanban-plugin: board
       const baseTitle = this.stripColumnCount(title);
       if (baseTitle === searchTitle) {
         targetGroup = group;
-        console.log('[AUTO-SELECT] Found matching column:', title);
+        if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] Found matching column:', title);
         break;
       }
     }
     
     if (!targetGroup) {
-      console.log('[AUTO-SELECT] Column not found:', searchTitle);
+      if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] Column not found:', searchTitle);
       this.pauseTimerIfNoActiveTasks();
       return;
     }
@@ -3766,7 +3783,7 @@ kanban-plugin: board
     const incompleteTasks = targetGroup.querySelectorAll('.pomodoro-task-item:not(.task-completed)');
     
     if (incompleteTasks.length === 0) {
-      console.log('[AUTO-SELECT] No incomplete tasks in column:', searchTitle);
+      if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] No incomplete tasks in column:', searchTitle);
       this.pauseTimerIfNoActiveTasks();
       return;
     }
@@ -3777,7 +3794,7 @@ kanban-plugin: board
     const timerElement = nextTask.querySelector('.task-timer') as HTMLElement;
     
     if (taskId && timerElement) {
-      console.log('[AUTO-SELECT] Selecting next incomplete task in column:', searchTitle);
+      if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] Selecting next incomplete task in column:', searchTitle);
       this.selectTask(taskId, nextTask, timerElement);
       
       // Scroll to the progress column to keep it in view (not to Done)
@@ -3792,7 +3809,7 @@ kanban-plugin: board
    */
   private pauseTimerIfNoActiveTasks() {
     if (!this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === 'work') {
-      console.log('[AUTO-SELECT] No active task, pausing timer');
+      if (this.plugin.settings.debugMode) console.log('[AUTO-SELECT] No active task, pausing timer');
       this.plugin.togglePause();
       new Notice('No more tasks - timer paused');
     }
@@ -3826,7 +3843,7 @@ kanban-plugin: board
     const checkbox = taskElement.querySelector('.task-checkbox') as HTMLInputElement;
     
     if (isCompleted || (checkbox && checkbox.checked)) {
-      console.log('[TASK SELECTION] Cannot select completed task:', taskText);
+      if (this.plugin.settings.debugMode) console.log('[TASK SELECTION] Cannot select completed task:', taskText);
       return;
     }
     
@@ -3860,7 +3877,7 @@ kanban-plugin: board
             setTimeout(() => {
               // Double-check that tasks container is populated
               if (!this.tasksContainer || this.tasksContainer.children.length === 0) {
-                console.log('[AUTO-MOVE] Tasks container not ready yet, retrying...');
+                if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Tasks container not ready yet, retrying...');
                 setTimeout(() => {
                   this.handlePostMoveActions(taskText, 'progress');
                 }, 300);
@@ -3868,7 +3885,7 @@ kanban-plugin: board
               }
               
               const newProgressColumns = this.findColumnsByType('progress');
-              console.log('[AUTO-MOVE] Found progress columns after reload:', newProgressColumns.length);
+              if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Found progress columns after reload:', newProgressColumns.length);
               
               if (newProgressColumns.length > 0) {
                 // Scroll to the FIRST progress column (not the Phase Progress one if both exist)
@@ -3878,12 +3895,12 @@ kanban-plugin: board
                 // Find and select the task by its text content in the new column
                 setTimeout(() => {
                   const tasksInColumn = targetColumn.element.querySelectorAll('.pomodoro-task-item');
-                  console.log('[AUTO-MOVE] Looking for task in', targetColumn.title, ', found', tasksInColumn.length, 'tasks');
+                  if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Looking for task in', targetColumn.title, ', found', tasksInColumn.length, 'tasks');
                   
                   tasksInColumn.forEach(task => {
                     const taskTextEl = task.querySelector('.task-text');
                     if (taskTextEl && taskTextEl.textContent === taskText) {
-                      console.log('[AUTO-MOVE] Found moved task, selecting it');
+                      if (this.plugin.settings.debugMode) console.log('[AUTO-MOVE] Found moved task, selecting it');
                       const htmlTask = task as HTMLElement;
                       const timerEl = htmlTask.querySelector('.task-timer') as HTMLElement;
                       if (timerEl) {
@@ -3902,7 +3919,7 @@ kanban-plugin: board
     }
     
     console.log('═══════════════════════════════════════════════════════');
-    console.log('[TASK SELECTION] Switching task');
+    if (this.plugin.settings.debugMode) console.log('[TASK SELECTION] Switching task');
     console.log('  Previous Task ID:', this.activeTaskId || 'None');
     console.log('  New Task ID:', taskId);
     console.log('  New Task Name:', taskText);

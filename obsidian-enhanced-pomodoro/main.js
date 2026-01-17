@@ -385,6 +385,10 @@ var CircularTimerView = class extends import_obsidian.ItemView {
       this.loadMiniCalendarView();
     } else if (view === "calendar-tasks") {
       this.loadCalendarTasksView();
+    } else if (view === "manual") {
+      if (this.plugin.settings.kanbanBoardPath) {
+        this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+      }
     }
     this.updateTaskContextDisplay();
   }
@@ -445,7 +449,7 @@ var CircularTimerView = class extends import_obsidian.ItemView {
     try {
       const existingFile = this.app.vault.getAbstractFileByPath(dailyNotePath);
       if (existingFile instanceof import_obsidian.TFile) {
-        console.log("[CALENDAR] Daily kanban file already exists:", dailyNotePath);
+        if (this.plugin.settings.debugMode) console.log("[CALENDAR] Daily kanban file already exists:", dailyNotePath);
         return;
       }
       const formattedDate = date.toLocaleDateString("en-US", {
@@ -478,7 +482,7 @@ kanban-plugin: board
 %%
 `;
       await this.app.vault.create(dailyNotePath, content);
-      console.log("[CALENDAR] Created daily kanban file:", dailyNotePath);
+      if (this.plugin.settings.debugMode) console.log("[CALENDAR] Created daily kanban file:", dailyNotePath);
       await this.loadKanbanBoards();
       if (this.kanbanSelector) {
         this.kanbanSelector.value = dailyNotePath;
@@ -618,7 +622,7 @@ ${tasksSection}
         let text = checkboxMatch[2].trim();
         let timeSeconds = 0;
         const timerMatch = text.match(/ - (?:🍎\s*)?(\d+):(\d{2})/) || text.match(/(\d+):(\d{2})$/);
-        console.log("[SYNC EXTRACT] Task text:", text, "Timer match:", timerMatch);
+        if (this.plugin.settings.debugMode) console.log("[SYNC EXTRACT] Task text:", text, "Timer match:", timerMatch);
         if (timerMatch) {
           const minutes = parseInt(timerMatch[1], 10);
           const seconds = parseInt(timerMatch[2], 10);
@@ -944,7 +948,7 @@ ${tasksSection}
       ariaLabel: "Open Pomodoro Settings",
       onClick: () => {
         this.app.setting.open();
-        this.app.setting.openTabById("enhanced-pomodoro");
+        this.app.setting.openTabById("enhanced-pomodoro-timer");
       }
     });
     playBtn = this.createControlButton(mainControls, {
@@ -1827,15 +1831,15 @@ ${tasksSection}
       if (!(file instanceof import_obsidian.TFile)) return false;
       const taskElement = this.tasksContainer?.querySelector(`[data-task-id="${taskId}"]`);
       if (!taskElement) {
-        console.log("[MOVE TASK] Task element not found for ID:", taskId);
+        if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Task element not found for ID:", taskId);
         return false;
       }
       const taskText = taskElement.querySelector(".task-text")?.textContent || "";
       if (!taskText) {
-        console.log("[MOVE TASK] Task text not found");
+        if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Task text not found");
         return false;
       }
-      console.log("[MOVE TASK] Looking for task:", taskText);
+      if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Looking for task:", taskText);
       const content = await this.app.vault.read(file);
       const lines = content.split("\n");
       let taskLine = null;
@@ -1859,7 +1863,7 @@ ${tasksSection}
           if (targetColumnIndex === -1 || targetColumnType === "progress" && currentColumn.includes("\u{1F6A7}") && !columns.find((c) => c.startIndex === targetColumnIndex)?.name.includes("\u{1F6A7}") || targetColumnType === "done" && currentColumn.includes("\u2705") && !columns.find((c) => c.startIndex === targetColumnIndex)?.name.includes("\u2705")) {
             if (targetColumnType === "progress" && this.isProgressColumn(currentColumn) || targetColumnType === "done" && this.isDoneColumn(currentColumn)) {
               targetColumnIndex = i;
-              console.log("[MOVE TASK] Found target column:", currentColumn, "at line", i);
+              if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Found target column:", currentColumn, "at line", i);
             }
           }
         }
@@ -1867,7 +1871,7 @@ ${tasksSection}
         if ((lineForMatch.startsWith("- [ ]") || lineForMatch.startsWith("- [x]")) && lineForMatch.includes(taskText)) {
           taskLine = rawLine;
           taskLineIndex = i;
-          console.log("[MOVE TASK] Found task at line", i, ":", line);
+          if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Found task at line", i, ":", line);
         }
       }
       if (explicitTargetColumnTitle) {
@@ -1876,23 +1880,23 @@ ${tasksSection}
         if (explicitColumn) {
           targetColumnIndex = explicitColumn.startIndex;
           targetColumnEndIndex = explicitColumn.endIndex;
-          console.log("[MOVE TASK] Using explicit target column:", explicitTargetColumnTitle, "at line", targetColumnIndex);
+          if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Using explicit target column:", explicitTargetColumnTitle, "at line", targetColumnIndex);
         } else {
-          console.log("[MOVE TASK] Explicit target column not found, falling back:", explicitTargetColumnTitle);
+          if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Explicit target column not found, falling back:", explicitTargetColumnTitle);
         }
       }
       if (targetColumnIndex >= 0) {
         const targetCol = columns.find((c) => c.startIndex === targetColumnIndex);
         if (targetCol) {
           targetColumnEndIndex = targetCol.endIndex;
-          console.log("[MOVE TASK] Target column ends at line", targetColumnEndIndex);
+          if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Target column ends at line", targetColumnEndIndex);
         }
       }
       if (targetColumnIndex >= 0 && targetColumnEndIndex === -1) {
         targetColumnEndIndex = lines.length - 1;
       }
       if (taskLine && taskLineIndex >= 0 && targetColumnIndex >= 0) {
-        console.log("[MOVE TASK] Moving task:", {
+        if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Moving task:", {
           taskText,
           fromLine: taskLineIndex,
           toColumn: lines[targetColumnIndex],
@@ -1914,14 +1918,14 @@ ${tasksSection}
         }
         lines.splice(insertIndex, 0, taskLine);
         await this.app.vault.modify(file, lines.join("\n"));
-        console.log("[MOVE TASK] Task moved successfully to line", insertIndex);
+        if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Task moved successfully to line", insertIndex);
         setTimeout(async () => {
           await this.loadKanbanTasks(boardPath);
           this.plugin.app.workspace.trigger("file-modified");
         }, 200);
         return true;
       }
-      console.log("[MOVE TASK] Failed to move task:", {
+      if (this.plugin.settings.debugMode) console.log("[MOVE TASK] Failed to move task:", {
         taskFound: !!taskLine,
         taskIndex: taskLineIndex,
         targetFound: targetColumnIndex >= 0
@@ -1935,42 +1939,42 @@ ${tasksSection}
   // Track last updated timer value per task
   async updateTaskInKanbanFile(taskId, timeString) {
     if (!this.plugin.settings.updateTaskTimerInFile) {
-      console.log("[KANBAN UPDATE] Skipped: feature disabled");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Skipped: feature disabled");
       return;
     }
     if (!this.plugin.isRunning || this.plugin.currentMode !== "work") {
-      console.log("[KANBAN UPDATE] Skipped: timer not running or not work mode");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Skipped: timer not running or not work mode");
       return;
     }
     if (!timeString || timeString === "0:00") {
-      console.log("[KANBAN UPDATE] Skipped: timer is 0:00");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Skipped: timer is 0:00");
       return;
     }
     const lastValue = this.lastUpdateTimerValue.get(taskId);
     if (lastValue === timeString) {
-      console.log("[KANBAN UPDATE] Skipped: value unchanged");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Skipped: value unchanged");
       return;
     }
     const now = Date.now();
     if (now - this.lastKanbanUpdateTime < this.kanbanUpdateDebounceDelay) {
-      console.log("[KANBAN UPDATE] Skipped: debounce (", now - this.lastKanbanUpdateTime, "ms since last)");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Skipped: debounce (", now - this.lastKanbanUpdateTime, "ms since last)");
       return;
     }
-    console.log("[KANBAN UPDATE] Attempting update for task:", taskId, "time:", timeString);
+    if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Attempting update for task:", taskId, "time:", timeString);
     try {
       const boardPath = this.plugin.settings.kanbanBoardPath;
       if (!boardPath) {
-        console.log("[KANBAN UPDATE] Failed: no boardPath");
+        if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Failed: no boardPath");
         return;
       }
       const file = this.app.vault.getAbstractFileByPath(boardPath);
       if (!(file instanceof import_obsidian.TFile)) {
-        console.log("[KANBAN UPDATE] Failed: file not found at", boardPath);
+        if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Failed: file not found at", boardPath);
         return;
       }
       const taskText = this.currentTaskElement?.querySelector(".task-text")?.textContent;
       if (!taskText) {
-        console.log("[KANBAN UPDATE] Failed: no task text found");
+        if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Failed: no task text found");
         return;
       }
       const content = await this.app.vault.read(file);
@@ -1986,7 +1990,7 @@ ${tasksSection}
           if (lineTaskText === taskText) {
             lines[i] = `${prefix}${taskText} - \u{1F34E} ${timeString}`;
             updated = true;
-            console.log("[KANBAN UPDATE] Updated line:", lines[i]);
+            if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Updated line:", lines[i]);
             break;
           }
         }
@@ -1995,9 +1999,9 @@ ${tasksSection}
         await this.app.vault.modify(file, lines.join("\n"));
         this.lastKanbanUpdateTime = Date.now();
         this.lastUpdateTimerValue.set(taskId, timeString);
-        console.log("[KANBAN UPDATE] Successfully wrote to file");
+        if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Successfully wrote to file");
       } else {
-        console.log("[KANBAN UPDATE] Task not found in file:", taskText);
+        if (this.plugin.settings.debugMode) console.log("[KANBAN UPDATE] Task not found in file:", taskText);
       }
     } catch (error) {
       console.error("[KANBAN UPDATE] Error updating task in file:", error);
@@ -2022,17 +2026,17 @@ ${tasksSection}
   }
   scrollToColumn(columnElement) {
     if (!this.tasksContainer) {
-      console.log("[SCROLL] No tasks container found");
+      if (this.plugin.settings.debugMode) console.log("[SCROLL] No tasks container found");
       return;
     }
     const containerStyles = window.getComputedStyle(this.tasksContainer);
-    console.log("[SCROLL] Container overflow-x:", containerStyles.overflowX);
+    if (this.plugin.settings.debugMode) console.log("[SCROLL] Container overflow-x:", containerStyles.overflowX);
     if (containerStyles.overflowX === "visible") {
       this.tasksContainer.style.overflowX = "auto";
     }
     setTimeout(() => {
       if (!this.tasksContainer) {
-        console.log("[SCROLL] Tasks container no longer exists");
+        if (this.plugin.settings.debugMode) console.log("[SCROLL] Tasks container no longer exists");
         return;
       }
       const scrollLeft = columnElement.offsetLeft - 20;
@@ -2047,7 +2051,7 @@ ${tasksSection}
       if (this.tasksContainer.scrollLeft !== finalScrollLeft) {
         this.tasksContainer.scrollLeft = finalScrollLeft;
       }
-      console.log("[SCROLL] Scrolling to column:", {
+      if (this.plugin.settings.debugMode) console.log("[SCROLL] Scrolling to column:", {
         columnLeft: columnElement.offsetLeft,
         scrollTo: finalScrollLeft,
         currentScroll: this.tasksContainer.scrollLeft,
@@ -2137,29 +2141,29 @@ ${tasksSection}
         this.kanbanSelector.value = this.plugin.settings.kanbanBoardPath;
       }
       if (this.kanbanSelector.value === this.plugin.settings.kanbanBoardPath) {
-        console.log("[Kanban Startup] Restoring last active board:", this.plugin.settings.kanbanBoardPath);
+        if (this.plugin.settings.debugMode) console.log("[Kanban Startup] Restoring last active board:", this.plugin.settings.kanbanBoardPath);
         try {
           await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
-          console.log("[Kanban Startup] Tasks loaded successfully");
+          if (this.plugin.settings.debugMode) console.log("[Kanban Startup] Tasks loaded successfully");
           this.updateTaskContextDisplay();
         } catch (error) {
           console.error("[Kanban Startup] Failed loading tasks:", error);
         }
       } else {
-        console.log("[Kanban Startup] Previous board no longer exists:", this.plugin.settings.kanbanBoardPath);
+        if (this.plugin.settings.debugMode) console.log("[Kanban Startup] Previous board no longer exists:", this.plugin.settings.kanbanBoardPath);
         this.plugin.settings.kanbanBoardPath = "";
         await this.plugin.saveSettings();
         this.updateTaskContextDisplay();
       }
     } else {
-      console.log("[Kanban Startup] No previous board to restore");
+      if (this.plugin.settings.debugMode) console.log("[Kanban Startup] No previous board to restore");
     }
     if (this.kanbanSelector) {
       this.kanbanSelector.addEventListener("change", async (e) => {
         const selectedPath = e.target?.value;
         if (!selectedPath) return;
         console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
-        console.log("[KANBAN SELECTION] Changing Kanban board");
+        if (this.plugin.settings.debugMode) console.log("[KANBAN SELECTION] Changing Kanban board");
         console.log("  Previous Board:", this.plugin.settings.kanbanBoardPath || "None");
         console.log("  New Board:", selectedPath);
         console.log("  Active Task Before Switch:", this.activeTaskId || "None");
@@ -2210,6 +2214,9 @@ ${tasksSection}
       this.refreshButton.addEventListener("click", async (e) => {
         e.stopPropagation();
         await this.loadKanbanBoards();
+        if (this.plugin.settings.kanbanBoardPath) {
+          await this.loadKanbanTasks(this.plugin.settings.kanbanBoardPath);
+        }
         if (this.plugin.refreshKanbanButtons) {
           this.plugin.refreshKanbanButtons(true);
         }
@@ -2243,11 +2250,11 @@ ${tasksSection}
       return;
     }
     if (this.isLoadingKanbanBoards) {
-      console.log("[KANBAN LOAD] Already loading, skipping duplicate call");
+      if (this.plugin.settings.debugMode) console.log("[KANBAN LOAD] Already loading, skipping duplicate call");
       return;
     }
     this.isLoadingKanbanBoards = true;
-    console.log("[KANBAN LOAD] Loading Kanban boards...");
+    if (this.plugin.settings.debugMode) console.log("[KANBAN LOAD] Loading Kanban boards...");
     while (this.kanbanSelector.options.length > 1) {
       this.kanbanSelector.remove(1);
     }
@@ -2493,31 +2500,31 @@ ${tasksSection}
       let sortedColumns;
       const userColumnOrder = this.plugin.settings.perBoardColumnOrder?.[boardPath];
       const mainColumns = this.plugin.settings.perBoardMainColumns?.[boardPath];
-      console.log("[SIDEBAR COLUMNS] Board path:", boardPath);
-      console.log("[SIDEBAR COLUMNS] User column order:", userColumnOrder);
-      console.log("[SIDEBAR COLUMNS] Main columns mapping:", mainColumns);
-      console.log("[SIDEBAR COLUMNS] File columns:", allColumnNames);
+      if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Board path:", boardPath);
+      if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] User column order:", userColumnOrder);
+      if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Main columns mapping:", mainColumns);
+      if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] File columns:", allColumnNames);
       if (userColumnOrder && userColumnOrder.length > 0) {
-        console.log("[SIDEBAR COLUMNS] Using user column order");
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Using user column order");
         sortedColumns = userColumnOrder.filter(
           (col) => allColumnNames.some(
             (fileCol) => this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(col) || fileCol.includes(col) || col.includes(fileCol)
           )
         );
-        console.log("[SIDEBAR COLUMNS] After filter:", sortedColumns);
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] After filter:", sortedColumns);
         sortedColumns = sortedColumns.map((userCol) => {
           const matchingFileCol = allColumnNames.find(
             (fileCol) => this.normalizeColumnTitle(fileCol) === this.normalizeColumnTitle(userCol) || fileCol.includes(userCol) || userCol.includes(fileCol)
           );
           return matchingFileCol || userCol;
         });
-        console.log("[SIDEBAR COLUMNS] After mapping:", sortedColumns);
-        console.log("[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):", sortedColumns);
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] After mapping:", sortedColumns);
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Final sorted (respecting user exclusions):", sortedColumns);
       } else if (allColumnNames.length > 0) {
-        console.log("[SIDEBAR COLUMNS] Using file order (no user config)");
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Using file order (no user config)");
         sortedColumns = allColumnNames;
       } else {
-        console.log("[SIDEBAR COLUMNS] Using fallback sorting");
+        if (this.plugin.settings.debugMode) console.log("[SIDEBAR COLUMNS] Using fallback sorting");
         sortedColumns = Array.from(tasksByColumn.keys()).sort((a, b) => {
           const aCompleted = this.isDoneColumn(a);
           const bCompleted = this.isDoneColumn(b);
@@ -2634,7 +2641,7 @@ ${tasksSection}
             await this.updateTaskCompletionState(taskId, checkbox.checked);
             if (checkbox.checked) {
               if (this.activeTaskId === taskId) {
-                console.log("[TASK COMPLETE] Clearing active task as it was just completed");
+                if (this.plugin.settings.debugMode) console.log("[TASK COMPLETE] Clearing active task as it was just completed");
                 this.activeTaskId = null;
                 this.currentTaskElement = null;
               }
@@ -2647,19 +2654,24 @@ ${tasksSection}
                 const finalTimeStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
                 await this.updateTaskInKanbanFile(taskId, finalTimeStr);
               }
+              if (this.plugin && "clearTaskLogs" in this.plugin) {
+                this.plugin.clearTaskLogs(taskId);
+              }
+              this.taskTimers.delete(taskId);
+              if (this.plugin.settings.debugMode) console.log("[TASK COMPLETE] Cleared logs and timer for taskId:", taskId);
               if (this.plugin.settings.autoMoveToDone) {
                 const currentGroupEl = taskItem.closest(".pomodoro-task-group");
                 const currentColumnTitle = currentGroupEl?.querySelector(".pomodoro-column-header .column-title")?.textContent || "";
                 if (!this.isDoneColumn(currentColumnTitle)) {
                   this.taskOriginalColumns.set(taskId, currentColumnTitle);
-                  console.log("[AUTO-MOVE] Storing original column for task:", currentColumnTitle);
+                  if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Storing original column for task:", currentColumnTitle);
                   const doneColumns = this.findColumnsByType("done");
                   if (doneColumns.length === 0) {
-                    console.log("[AUTO-MOVE] No Done column found");
+                    if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] No Done column found");
                     new import_obsidian.Notice('No "Done" column found on this board.');
                   } else {
                     const doneTitle = doneColumns[0].title;
-                    console.log("[AUTO-MOVE] Moving completed task to Done column:", doneTitle);
+                    if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Moving completed task to Done column:", doneTitle);
                     const moved = await this.moveTaskToColumn(taskId, "done", doneTitle);
                     if (moved) {
                       new import_obsidian.Notice(`Task moved to "${doneTitle}"`);
@@ -2796,7 +2808,7 @@ ${tasksSection}
   selectNextIncompleteTaskInColumn(columnTitle) {
     if (!this.tasksContainer) return;
     const searchTitle = this.stripColumnCount(columnTitle);
-    console.log("[AUTO-SELECT] Looking for column (base name):", searchTitle);
+    if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] Looking for column (base name):", searchTitle);
     const groups = Array.from(this.tasksContainer.querySelectorAll(".pomodoro-task-group"));
     let targetGroup = null;
     for (const group of groups) {
@@ -2804,18 +2816,18 @@ ${tasksSection}
       const baseTitle = this.stripColumnCount(title);
       if (baseTitle === searchTitle) {
         targetGroup = group;
-        console.log("[AUTO-SELECT] Found matching column:", title);
+        if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] Found matching column:", title);
         break;
       }
     }
     if (!targetGroup) {
-      console.log("[AUTO-SELECT] Column not found:", searchTitle);
+      if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] Column not found:", searchTitle);
       this.pauseTimerIfNoActiveTasks();
       return;
     }
     const incompleteTasks = targetGroup.querySelectorAll(".pomodoro-task-item:not(.task-completed)");
     if (incompleteTasks.length === 0) {
-      console.log("[AUTO-SELECT] No incomplete tasks in column:", searchTitle);
+      if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] No incomplete tasks in column:", searchTitle);
       this.pauseTimerIfNoActiveTasks();
       return;
     }
@@ -2823,7 +2835,7 @@ ${tasksSection}
     const taskId = nextTask.getAttribute("data-task-id");
     const timerElement = nextTask.querySelector(".task-timer");
     if (taskId && timerElement) {
-      console.log("[AUTO-SELECT] Selecting next incomplete task in column:", searchTitle);
+      if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] Selecting next incomplete task in column:", searchTitle);
       this.selectTask(taskId, nextTask, timerElement);
       this.scrollToColumn(targetGroup);
     } else {
@@ -2835,7 +2847,7 @@ ${tasksSection}
    */
   pauseTimerIfNoActiveTasks() {
     if (!this.activeTaskId && this.plugin.isRunning && this.plugin.currentMode === "work") {
-      console.log("[AUTO-SELECT] No active task, pausing timer");
+      if (this.plugin.settings.debugMode) console.log("[AUTO-SELECT] No active task, pausing timer");
       this.plugin.togglePause();
       new import_obsidian.Notice("No more tasks - timer paused");
     }
@@ -2859,7 +2871,7 @@ ${tasksSection}
     const isCompleted = taskElement.classList.contains("task-completed");
     const checkbox = taskElement.querySelector(".task-checkbox");
     if (isCompleted || checkbox && checkbox.checked) {
-      console.log("[TASK SELECTION] Cannot select completed task:", taskText);
+      if (this.plugin.settings.debugMode) console.log("[TASK SELECTION] Cannot select completed task:", taskText);
       return;
     }
     const groupEl = taskElement.closest(".pomodoro-task-group");
@@ -2881,24 +2893,24 @@ ${tasksSection}
             new import_obsidian.Notice(`Task moved to "${progressTitle}"`);
             setTimeout(() => {
               if (!this.tasksContainer || this.tasksContainer.children.length === 0) {
-                console.log("[AUTO-MOVE] Tasks container not ready yet, retrying...");
+                if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Tasks container not ready yet, retrying...");
                 setTimeout(() => {
                   this.handlePostMoveActions(taskText, "progress");
                 }, 300);
                 return;
               }
               const newProgressColumns = this.findColumnsByType("progress");
-              console.log("[AUTO-MOVE] Found progress columns after reload:", newProgressColumns.length);
+              if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Found progress columns after reload:", newProgressColumns.length);
               if (newProgressColumns.length > 0) {
                 const targetColumn = newProgressColumns.find((c) => c.title.includes("In Progress")) || newProgressColumns[0];
                 this.scrollToColumn(targetColumn.element);
                 setTimeout(() => {
                   const tasksInColumn = targetColumn.element.querySelectorAll(".pomodoro-task-item");
-                  console.log("[AUTO-MOVE] Looking for task in", targetColumn.title, ", found", tasksInColumn.length, "tasks");
+                  if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Looking for task in", targetColumn.title, ", found", tasksInColumn.length, "tasks");
                   tasksInColumn.forEach((task) => {
                     const taskTextEl = task.querySelector(".task-text");
                     if (taskTextEl && taskTextEl.textContent === taskText) {
-                      console.log("[AUTO-MOVE] Found moved task, selecting it");
+                      if (this.plugin.settings.debugMode) console.log("[AUTO-MOVE] Found moved task, selecting it");
                       const htmlTask = task;
                       const timerEl = htmlTask.querySelector(".task-timer");
                       if (timerEl) {
@@ -2915,7 +2927,7 @@ ${tasksSection}
       }
     }
     console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
-    console.log("[TASK SELECTION] Switching task");
+    if (this.plugin.settings.debugMode) console.log("[TASK SELECTION] Switching task");
     console.log("  Previous Task ID:", this.activeTaskId || "None");
     console.log("  New Task ID:", taskId);
     console.log("  New Task Name:", taskText);
@@ -3496,6 +3508,7 @@ var kanbanStyles = `
 }
 
 .kanban-list {
+  min-height: 50px;
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--background-modifier-border);
@@ -3504,6 +3517,7 @@ var kanbanStyles = `
 }
 
 .kanban-list select {
+  height: 50px;
   width: 100%;
   padding: 8px;
   background-color: var(--background-primary);
@@ -3939,14 +3953,14 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     if (schedule.id.startsWith("board-") && boardPath && this.settings.perBoardSchedule?.[boardPath]) {
       this.settings.perBoardSchedule[boardPath].currentPhaseIndex = currentIndex;
       this.saveSettings();
-      console.log("[Schedule] Advanced board schedule to phase", currentIndex, "of", schedule.phases.length);
+      if (this.settings.debugMode) console.log("[Schedule] Advanced board schedule to phase", currentIndex, "of", schedule.phases.length);
     } else {
       const scheduleIndex = this.settings.schedules.findIndex((s) => s.id === schedule.id);
       if (scheduleIndex !== -1) {
         this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
         this.saveSettings();
       }
-      console.log("[Schedule] Advanced to phase", currentIndex, "of", schedule.phases.length);
+      if (this.settings.debugMode) console.log("[Schedule] Advanced to phase", currentIndex, "of", schedule.phases.length);
     }
   }
   /**
@@ -4027,7 +4041,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       if (currentPhase) {
         this.currentMode = currentPhase.type;
         this.timeRemaining = currentPhase.duration * 60;
-        console.log("[Start] Using custom schedule phase:", currentPhase.type, "(", currentPhase.duration, "min)");
+        if (this.settings.debugMode) console.log("[Start] Using custom schedule phase:", currentPhase.type, "(", currentPhase.duration, "min)");
       } else {
         this.currentMode = "work";
         this.timeRemaining = (schedule.workDuration || 25) * 60;
@@ -4053,14 +4067,14 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
     if (view && "pauseTaskTimer" in view) {
       view.pauseTaskTimer();
-      console.log("[Quick Break] Task timer paused");
+      if (this.settings.debugMode) console.log("[Quick Break] Task timer paused");
     }
     this.quickBreakSavedState = {
       wasRunning: this.isRunning,
       previousMode: this.currentMode,
       previousTime: this.timeRemaining
     };
-    console.log("[Quick Break] Saved state:", this.quickBreakSavedState);
+    if (this.settings.debugMode) console.log("[Quick Break] Saved state:", this.quickBreakSavedState);
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
@@ -4074,9 +4088,9 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     this.startTimer();
   }
   async restoreAfterQuickBreak() {
-    console.log("[Quick Break] Restoring state:", this.quickBreakSavedState);
+    if (this.settings.debugMode) console.log("[Quick Break] Restoring state:", this.quickBreakSavedState);
     if (!this.quickBreakSavedState) {
-      console.log("[Quick Break] No saved state, resetting timer");
+      if (this.settings.debugMode) console.log("[Quick Break] No saved state, resetting timer");
       this.resetTimer();
       return;
     }
@@ -4093,7 +4107,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       }
       if (savedState.wasRunning && "lastUpdateTime" in view) {
         view.lastUpdateTime = Date.now();
-        console.log("[Quick Break] Task timer tracking reset");
+        if (this.settings.debugMode) console.log("[Quick Break] Task timer tracking reset");
       }
     }
     new import_obsidian2.Notice("Quick break over! Resuming previous session" + (savedState.wasRunning ? "" : " (timer paused)") + ".");
@@ -4104,17 +4118,16 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   }
   async endCurrentCycle() {
     if (this.quickBreakSavedState) {
-      console.log("[End Cycle] Ending quick break, restoring previous state");
+      if (this.settings.debugMode) console.log("[End Cycle] Ending quick break, restoring previous state");
       await this.restoreAfterQuickBreak();
       return;
     }
-    console.log("[End Cycle] Ending current session phase (manual trigger)");
+    if (this.settings.debugMode) console.log("[End Cycle] Ending current session phase (manual trigger)");
     await this.completeSession(true);
   }
   playSound(sound) {
-    console.log("[Sound] muteSounds setting:", this.settings.muteSounds);
     if (this.settings.muteSounds) {
-      console.log("[Sound] Muted - skipping:", sound);
+      if (this.settings.debugMode) console.log("[Sound] Muted - skipping:", sound);
       return;
     }
     try {
@@ -4257,7 +4270,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       const firstPhase = schedule.phases[0];
       this.currentMode = firstPhase.type;
       this.timeRemaining = firstPhase.duration * 60;
-      console.log("[Reset] Starting with first phase of custom schedule:", firstPhase.type, "(", firstPhase.duration, "min)");
+      if (this.settings.debugMode) console.log("[Reset] Starting with first phase of custom schedule:", firstPhase.type, "(", firstPhase.duration, "min)");
     } else {
       this.currentMode = "work";
       this.timeRemaining = this.getDurationForPhase("work") * 60;
@@ -4265,7 +4278,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     this.sessionsCompleted = 0;
     this.settings.sessionsCompletedCount = 0;
     await this.saveSettings();
-    console.log("[Reset] Sessions count reset to 0");
+    if (this.settings.debugMode) console.log("[Reset] Sessions count reset to 0");
     this.updateStatusBar();
     const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
     if (view && "updateDisplay" in view) {
@@ -4276,7 +4289,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
   async completeSession(isManualTrigger = false) {
     const now = Date.now();
     if (!isManualTrigger && now - this.lastSessionCompleteTime < 5e3) {
-      console.log("[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)");
+      if (this.settings.debugMode) console.log("[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)");
       return;
     }
     this.lastSessionCompleteTime = now;
@@ -4286,12 +4299,12 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       this.timerInterval = null;
     }
     const schedule = this.getCurrentSchedule();
-    console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
-    console.log("[COMPLETE SESSION] Session finished");
-    console.log("  Current Mode:", this.currentMode);
-    console.log("  Sessions Completed:", this.sessionsCompleted);
-    console.log("  Schedule:", schedule.name);
-    console.log("  Auto-Start Setting:", schedule.autoStartNext, "(type:", typeof schedule.autoStartNext, ")");
+    if (this.settings.debugMode) console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+    if (this.settings.debugMode) console.log("[COMPLETE SESSION] Session finished");
+    if (this.settings.debugMode) console.log("  Current Mode:", this.currentMode);
+    if (this.settings.debugMode) console.log("  Sessions Completed:", this.sessionsCompleted);
+    if (this.settings.debugMode) console.log("  Schedule:", schedule.name);
+    if (this.settings.debugMode) console.log("  Auto-Start Setting:", schedule.autoStartNext, "(type:", typeof schedule.autoStartNext, ")");
     if (this.currentMode === "work") {
       const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
       if (view && "pauseTaskTimer" in view) {
@@ -4300,7 +4313,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       this.sessionsCompleted++;
       this.settings.sessionsCompletedCount = this.sessionsCompleted;
       await this.saveSettings();
-      console.log("  \u2192 Work Complete! Sessions:", this.sessionsCompleted);
+      if (this.settings.debugMode) console.log("  \u2192 Work Complete! Sessions:", this.sessionsCompleted);
       new import_obsidian2.Notice(`Work session complete!`);
       await this.logSession("work_complete");
       this.playSound("shortbreak");
@@ -4312,63 +4325,63 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         if (nextPhase && (nextPhase.type === "shortBreak" || nextPhase.type === "longBreak")) {
           nextMode = nextPhase.type;
           nextDuration = nextPhase.duration;
-          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || nextPhase.type);
+          if (this.settings.debugMode) console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.name || nextPhase.type);
         } else if (nextPhase && nextPhase.type === "work") {
-          console.log("  \u2192 Custom Sequence: Work\u2192Work wrap-around, starting new cycle");
+          if (this.settings.debugMode) console.log("  \u2192 Custom Sequence: Work\u2192Work wrap-around, starting new cycle");
           this.currentMode = "work";
           this.timeRemaining = nextPhase.duration * 60;
           new import_obsidian2.Notice("Starting new work cycle!");
           this.playSound("ding");
           this.updateStatusBar();
           if (schedule.autoStartNext === true) {
-            console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
+            if (this.settings.debugMode) console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
             this.isRunning = true;
             this.startTimer();
           }
-          console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+          if (this.settings.debugMode) console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
           return;
         } else {
           const isLongBreak = this.sessionsCompleted % 4 === 0;
           nextMode = isLongBreak ? "longBreak" : "shortBreak";
           nextDuration = this.getDurationForPhase(nextMode);
-          console.log("  \u2192 Fallback to Legacy Break Type:", nextMode);
+          if (this.settings.debugMode) console.log("  \u2192 Fallback to Legacy Break Type:", nextMode);
         }
       } else {
         const isLongBreak = this.sessionsCompleted % 4 === 0;
         nextMode = isLongBreak ? "longBreak" : "shortBreak";
         nextDuration = this.getDurationForPhase(nextMode);
-        console.log("  \u2192 Legacy Break Type:", nextMode, "Long Break:", isLongBreak);
+        if (this.settings.debugMode) console.log("  \u2192 Legacy Break Type:", nextMode, "Long Break:", isLongBreak);
       }
       this.currentMode = nextMode;
       this.timeRemaining = nextDuration * 60;
-      console.log("  \u2192 Next Break Duration:", Math.floor(this.timeRemaining / 60), "minutes");
+      if (this.settings.debugMode) console.log("  \u2192 Next Break Duration:", Math.floor(this.timeRemaining / 60), "minutes");
       new import_obsidian2.Notice(`Time for a ${nextMode === "longBreak" ? "long" : "short"} break!`);
       this.playSound(nextMode === "longBreak" ? "longbreak" : "shortbreak");
       this.updateStatusBar();
       if (schedule.autoStartNext === true) {
-        console.log("  \u2192 Auto-start: YES - Starting break timer immediately");
+        if (this.settings.debugMode) console.log("  \u2192 Auto-start: YES - Starting break timer immediately");
         this.isRunning = true;
         this.startTimer();
       } else {
-        console.log("  \u2192 Auto-start: NO - Waiting for manual start");
+        if (this.settings.debugMode) console.log("  \u2192 Auto-start: NO - Waiting for manual start");
       }
     } else {
-      console.log("  Current Break Mode:", this.currentMode);
-      console.log("  Quick Break State Exists?", !!this.quickBreakSavedState);
+      if (this.settings.debugMode) console.log("  Current Break Mode:", this.currentMode);
+      if (this.settings.debugMode) console.log("  Quick Break State Exists?", !!this.quickBreakSavedState);
       if (this.quickBreakSavedState) {
-        console.log("  \u2192 This was a quick break - restoring previous state");
+        if (this.settings.debugMode) console.log("  \u2192 This was a quick break - restoring previous state");
         await this.restoreAfterQuickBreak();
-        console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+        if (this.settings.debugMode) console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
         return;
       }
-      console.log("  \u2192 Break Complete!");
+      if (this.settings.debugMode) console.log("  \u2192 Break Complete!");
       if (schedule.phases && schedule.phases.length > 0) {
         this.advanceToNextPhase();
         const nextPhase = this.getCurrentPhase();
         if (nextPhase) {
           this.currentMode = nextPhase.type;
           this.timeRemaining = nextPhase.duration * 60;
-          console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.type, "(", nextPhase.duration, "min)");
+          if (this.settings.debugMode) console.log("  \u2192 Custom Sequence Next Phase:", nextPhase.type, "(", nextPhase.duration, "min)");
           if (nextPhase.type === "work") {
             new import_obsidian2.Notice("Break is over! Time to work!");
           } else {
@@ -4378,7 +4391,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
         } else {
           this.currentMode = "work";
           this.timeRemaining = this.getDurationForPhase("work") * 60;
-          console.log("  \u2192 Fallback to default work duration");
+          if (this.settings.debugMode) console.log("  \u2192 Fallback to default work duration");
           new import_obsidian2.Notice("Break is over! Time to work!");
         }
       } else {
@@ -4390,7 +4403,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       this.playSound("ding");
       this.updateStatusBar();
       if (schedule.autoStartNext === true) {
-        console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
+        if (this.settings.debugMode) console.log("  \u2192 Auto-start: YES - Starting work timer immediately");
         this.isRunning = true;
         this.startTimer();
         const view = this.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
@@ -4398,10 +4411,10 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
           view.resumeTaskTimer();
         }
       } else {
-        console.log("  \u2192 Auto-start: NO - Waiting for manual start");
+        if (this.settings.debugMode) console.log("  \u2192 Auto-start: NO - Waiting for manual start");
       }
     }
-    console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+    if (this.settings.debugMode) console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
   }
   updateStatusBar(text) {
     if (!this.statusBarText) return;
@@ -4604,7 +4617,7 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
           }
           const containerEl = kanbanView.containerEl || kanbanView.view?.containerEl;
           if (!containerEl) {
-            console.log("No container element found for Kanban view");
+            if (this.settings.debugMode) console.log("No container element found for Kanban view");
             continue;
           }
           const taskItems = containerEl.querySelectorAll(".kanban-task-item");
@@ -4890,6 +4903,11 @@ ${actionLabel}
       logContainer.appendChild(sessionLog);
     }
   }
+  // Clear task logs when a task is completed (prevents carryover to new tasks with same index)
+  clearTaskLogs(taskId) {
+    this.taskLogs.delete(taskId);
+    if (this.settings.debugMode) console.log("[TASK LOGS] Cleared logs for taskId:", taskId);
+  }
   async onunload() {
     console.log("Unloading Enhanced Pomodoro plugin...");
     this.removeKanbanIntegration();
@@ -4940,6 +4958,9 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         if (view) {
           console.log("[Settings] Updating view display");
           view.updateDisplay();
+          if (view.refreshView) {
+            view.refreshView();
+          }
         } else {
           console.log("[Settings] View not yet loaded - changes will apply on next view open");
         }
@@ -4957,6 +4978,9 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
         if (view) {
           view.updateDisplay();
+          if (view.refreshView) {
+            view.refreshView();
+          }
         }
       }).setDynamicTooltip()
     );
@@ -4972,6 +4996,9 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
         if (view) {
           view.updateDisplay();
+          if (view.refreshView) {
+            view.refreshView();
+          }
         }
       }).setDynamicTooltip()
     );
@@ -4987,6 +5014,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       })
     );
     const kanbanBoardSetting = new import_obsidian2.Setting(containerEl).setName("Kanban Board").setDesc("Select a Kanban board to open and track tasks from");
+    kanbanBoardSetting.settingEl.classList.add("kanban-board-setting-vertical");
     kanbanBoardSetting.addButton((button) => {
       button.setIcon("refresh-cw").setTooltip("Refresh Kanban board list").onClick(() => this.plugin.refreshKanbanList(kanbanBoardSetting.controlEl));
     });
@@ -5206,9 +5234,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     );
     new import_obsidian2.Setting(containerEl).setName("Mute All Sounds").setDesc("Turn off all timer sounds").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.muteSounds).onChange(async (value) => {
-        console.log("[Settings] Mute toggle changed to:", value);
         this.plugin.settings.muteSounds = value;
-        console.log("[Settings] After setting, muteSounds is:", this.plugin.settings.muteSounds);
         await this.plugin.saveSettings();
         const view = this.plugin.app.workspace.getLeavesOfType("circular-timer-view")[0]?.view;
         if (view && view.updateMuteButton) {
@@ -5534,7 +5560,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
       await this.addColumnToKanbanFile(boardPath, columnName);
     }
     await this.plugin.saveSettings();
-    console.log("[SETTINGS] Updated main column mapping:", columnType, "=", columnName, "for", boardPath);
+    if (this.plugin.settings.debugMode) console.log("[SETTINGS] Updated main column mapping:", columnType, "=", columnName, "for", boardPath);
     this.refreshSidebarAfterSettingsChange();
   }
   async moveColumnInOrder(boardPath, fromIndex, toIndex) {
@@ -5548,7 +5574,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
     }
     this.plugin.settings.perBoardColumnOrder[boardPath] = order;
     await this.plugin.saveSettings();
-    console.log("[SETTINGS] Moved column in order for", boardPath, ":", order);
+    if (this.plugin.settings.debugMode) console.log("[SETTINGS] Moved column in order for", boardPath, ":", order);
     this.refreshSidebarAfterSettingsChange();
   }
   async removeColumnFromOrder(boardPath, index) {
@@ -5639,7 +5665,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
         if (headerMatch) {
           const existingColumn = headerMatch[1].replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim().toLowerCase();
           if (existingColumn === normalizedColumnName) {
-            console.log("[KANBAN] Column already exists:", columnName);
+            if (this.plugin.settings.debugMode) console.log("[KANBAN] Column already exists:", columnName);
             return false;
           }
         }
@@ -5657,7 +5683,7 @@ var EnhancedPomodoroSettingTab = class extends import_obsidian2.PluginSettingTab
 `;
       lines.splice(insertIndex, 0, newColumnContent);
       await this.app.vault.modify(file, lines.join("\n"));
-      console.log("[KANBAN] Added new column:", columnName, "to", boardPath);
+      if (this.plugin.settings.debugMode) console.log("[KANBAN] Added new column:", columnName, "to", boardPath);
       new import_obsidian2.Notice(`Added column "${columnName}" to Kanban board`);
       return true;
     } catch (error) {
@@ -5967,12 +5993,12 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
     this.plugin = plugin;
   }
   onOpen() {
-    console.log("[PROGRESS MODAL] Opening new chips-based modal");
+    if (this.plugin.settings.debugMode) console.log("[PROGRESS MODAL] Opening new chips-based modal");
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("column-config-modal");
     this.addStyles();
-    console.log("[PROGRESS MODAL] Creating header and content");
+    if (this.plugin.settings.debugMode) console.log("[PROGRESS MODAL] Creating header and content");
     contentEl.createEl("h2", { text: "\u{1F4CB} Column & Schedule Configuration" });
     contentEl.createEl("p", {
       text: 'Drag chips to reorder columns. Drag to the "Unused" area to disable a column.',
@@ -6181,7 +6207,7 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
     };
   }
   async moveChip(boardPath, fromIndex, toIndex) {
-    console.log("[COLUMN ORDER] moveChip called for board:", boardPath);
+    if (this.plugin.settings.debugMode) console.log("[COLUMN ORDER] moveChip called for board:", boardPath);
     const defaultColumns = ["\u{1F4CB} To Do", "\u{1F6A7} In Progress", "\u2705 Done"];
     const activeOrder = [...this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns];
     if (toIndex < 0 || toIndex >= activeOrder.length) return;
@@ -6191,9 +6217,9 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
       this.plugin.settings.perBoardColumnOrder = {};
     }
     this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
-    console.log("[COLUMN ORDER] Saving order for board:", boardPath, activeOrder);
+    if (this.plugin.settings.debugMode) console.log("[COLUMN ORDER] Saving order for board:", boardPath, activeOrder);
     await this.plugin.saveSettings();
-    console.log("[COLUMN ORDER] All board orders:", JSON.stringify(this.plugin.settings.perBoardColumnOrder));
+    if (this.plugin.settings.debugMode) console.log("[COLUMN ORDER] All board orders:", JSON.stringify(this.plugin.settings.perBoardColumnOrder));
     const configContainer = document.querySelector(".config-container");
     if (configContainer) this.renderBoardConfig(configContainer, boardPath);
   }
@@ -6207,16 +6233,16 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
       const editBtn = chip.createEl("button", { text: "\u270F\uFE0F", cls: "chip-btn edit" });
       editBtn.onclick = (e) => {
         e.stopPropagation();
-        console.log("[SCHEDULE EDIT] Edit button clicked for", type, "at index", index);
+        if (this.plugin.settings.debugMode) console.log("[SCHEDULE EDIT] Edit button clicked for", type, "at index", index);
         new InputModal(
           this.app,
           `Edit ${type} Duration`,
           "Duration in minutes",
           duration.toString(),
           async (newDuration) => {
-            console.log("[SCHEDULE EDIT] User entered:", newDuration);
+            if (this.plugin.settings.debugMode) console.log("[SCHEDULE EDIT] User entered:", newDuration);
             if (newDuration && !isNaN(parseInt(newDuration))) {
-              console.log("[SCHEDULE EDIT] Updating duration to", parseInt(newDuration));
+              if (this.plugin.settings.debugMode) console.log("[SCHEDULE EDIT] Updating duration to", parseInt(newDuration));
               await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
               const configContainer = container.closest(".config-container");
               if (configContainer) this.renderBoardConfig(configContainer, boardPath);
@@ -6342,7 +6368,7 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
     };
   }
   async updateMainColumnMapping(boardPath, columnType, columnName) {
-    console.log("[MAIN COLUMNS] updateMainColumnMapping called for board:", boardPath, "type:", columnType, "value:", columnName);
+    if (this.plugin.settings.debugMode) console.log("[MAIN COLUMNS] updateMainColumnMapping called for board:", boardPath, "type:", columnType, "value:", columnName);
     if (!this.plugin.settings.perBoardMainColumns) {
       this.plugin.settings.perBoardMainColumns = {};
     }
@@ -6375,7 +6401,7 @@ var ProgressColumnConfigModal = class extends import_obsidian2.Modal {
       }
     }
     await this.plugin.saveSettings();
-    console.log("[MAIN COLUMNS] Updated", columnType, "to", columnName, "for board", boardPath);
+    if (this.plugin.settings.debugMode) console.log("[MAIN COLUMNS] Updated", columnType, "to", columnName, "for board", boardPath);
   }
   async addPhaseToSchedule(boardPath, type, duration) {
     if (!this.plugin.settings.perBoardSchedule) {

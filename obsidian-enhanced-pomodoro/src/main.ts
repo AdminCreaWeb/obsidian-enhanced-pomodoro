@@ -19,6 +19,7 @@ const kanbanStyles = `
 }
 
 .kanban-list {
+  min-height: 50px;
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--background-modifier-border);
@@ -27,6 +28,7 @@ const kanbanStyles = `
 }
 
 .kanban-list select {
+  height: 50px;
   width: 100%;
   padding: 8px;
   background-color: var(--background-primary);
@@ -660,7 +662,7 @@ export default class EnhancedPomodoro extends Plugin {
       // Store phase index in board schedule
       this.settings.perBoardSchedule[boardPath].currentPhaseIndex = currentIndex;
       this.saveSettings();
-      console.log('[Schedule] Advanced board schedule to phase', currentIndex, 'of', schedule.phases.length);
+      if (this.settings.debugMode) console.log('[Schedule] Advanced board schedule to phase', currentIndex, 'of', schedule.phases.length);
     } else {
       // Update the schedule in the schedules array
       const scheduleIndex = this.settings.schedules.findIndex(s => s.id === schedule.id);
@@ -668,7 +670,7 @@ export default class EnhancedPomodoro extends Plugin {
         this.settings.schedules[scheduleIndex].currentPhaseIndex = currentIndex;
         this.saveSettings();
       }
-      console.log('[Schedule] Advanced to phase', currentIndex, 'of', schedule.phases.length);
+      if (this.settings.debugMode) console.log('[Schedule] Advanced to phase', currentIndex, 'of', schedule.phases.length);
     }
   }
   
@@ -776,7 +778,7 @@ export default class EnhancedPomodoro extends Plugin {
       if (currentPhase) {
         this.currentMode = currentPhase.type as 'work' | 'shortBreak' | 'longBreak';
         this.timeRemaining = currentPhase.duration * 60;
-        console.log('[Start] Using custom schedule phase:', currentPhase.type, '(', currentPhase.duration, 'min)');
+        if (this.settings.debugMode) console.log('[Start] Using custom schedule phase:', currentPhase.type, '(', currentPhase.duration, 'min)');
       } else {
         this.currentMode = 'work';
         this.timeRemaining = (schedule.workDuration || 25) * 60;
@@ -812,7 +814,7 @@ export default class EnhancedPomodoro extends Plugin {
     const view = this.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
     if (view && 'pauseTaskTimer' in view) {
       (view as any).pauseTaskTimer();
-      console.log('[Quick Break] Task timer paused');
+      if (this.settings.debugMode) console.log('[Quick Break] Task timer paused');
     }
 
     // Save current state BEFORE making changes
@@ -821,7 +823,7 @@ export default class EnhancedPomodoro extends Plugin {
       previousMode: this.currentMode,
       previousTime: this.timeRemaining
     };
-    console.log('[Quick Break] Saved state:', this.quickBreakSavedState);
+    if (this.settings.debugMode) console.log('[Quick Break] Saved state:', this.quickBreakSavedState);
 
     // Stop any running timer
     if (this.timerInterval) {
@@ -848,10 +850,10 @@ export default class EnhancedPomodoro extends Plugin {
   }
 
   private async restoreAfterQuickBreak() {
-    console.log('[Quick Break] Restoring state:', this.quickBreakSavedState);
+    if (this.settings.debugMode) console.log('[Quick Break] Restoring state:', this.quickBreakSavedState);
     
     if (!this.quickBreakSavedState) {
-      console.log('[Quick Break] No saved state, resetting timer');
+      if (this.settings.debugMode) console.log('[Quick Break] No saved state, resetting timer');
       // No saved state, just reset to work
       this.resetTimer();
       return;
@@ -877,7 +879,7 @@ export default class EnhancedPomodoro extends Plugin {
       // Reset lastUpdateTime so task timer resumes correctly when resuming
       if (savedState.wasRunning && 'lastUpdateTime' in view) {
         (view as any).lastUpdateTime = Date.now();
-        console.log('[Quick Break] Task timer tracking reset');
+        if (this.settings.debugMode) console.log('[Quick Break] Task timer tracking reset');
       }
     }
 
@@ -892,20 +894,20 @@ export default class EnhancedPomodoro extends Plugin {
   async endCurrentCycle() {
     // If in quick break, restore to previous work session
     if (this.quickBreakSavedState) {
-      console.log('[End Cycle] Ending quick break, restoring previous state');
+      if (this.settings.debugMode) console.log('[End Cycle] Ending quick break, restoring previous state');
       await this.restoreAfterQuickBreak();
       return;
     }
     
     // Otherwise, complete the current session and move to next phase
-    console.log('[End Cycle] Ending current session phase (manual trigger)');
+    if (this.settings.debugMode) console.log('[End Cycle] Ending current session phase (manual trigger)');
     await this.completeSession(true); // Manual trigger bypasses debounce
   }
   
   playSound(sound: string) {
     // Check if sounds are muted
     if (this.settings.muteSounds) {
-      console.log('[Sound] Muted - skipping:', sound);
+      if (this.settings.debugMode) console.log('[Sound] Muted - skipping:', sound);
       return;
     }
     
@@ -1102,7 +1104,7 @@ export default class EnhancedPomodoro extends Plugin {
       const firstPhase = schedule.phases[0];
       this.currentMode = firstPhase.type as 'work' | 'shortBreak' | 'longBreak';
       this.timeRemaining = firstPhase.duration * 60;
-      console.log('[Reset] Starting with first phase of custom schedule:', firstPhase.type, '(', firstPhase.duration, 'min)');
+      if (this.settings.debugMode) console.log('[Reset] Starting with first phase of custom schedule:', firstPhase.type, '(', firstPhase.duration, 'min)');
     } else {
       // Legacy schedule - default to work mode
       this.currentMode = 'work';
@@ -1113,7 +1115,7 @@ export default class EnhancedPomodoro extends Plugin {
     this.sessionsCompleted = 0;
     this.settings.sessionsCompletedCount = 0;
     await this.saveSettings();
-    console.log('[Reset] Sessions count reset to 0');
+    if (this.settings.debugMode) console.log('[Reset] Sessions count reset to 0');
     
     this.updateStatusBar();
     
@@ -1133,7 +1135,7 @@ export default class EnhancedPomodoro extends Plugin {
   // Debounce: Prevent duplicate completions within 5 seconds (skip for manual triggers)
   const now = Date.now();
   if (!isManualTrigger && now - this.lastSessionCompleteTime < 5000) {
-    console.log('[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)');
+    if (this.settings.debugMode) console.log('[COMPLETE SESSION] Skipping duplicate completion (within 5s debounce)');
     return;
   }
   this.lastSessionCompleteTime = now;
@@ -1145,12 +1147,12 @@ export default class EnhancedPomodoro extends Plugin {
   }
   
   const schedule = this.getCurrentSchedule();
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('[COMPLETE SESSION] Session finished');
-  console.log('  Current Mode:', this.currentMode);
-  console.log('  Sessions Completed:', this.sessionsCompleted);
-  console.log('  Schedule:', schedule.name);
-  console.log('  Auto-Start Setting:', schedule.autoStartNext, '(type:', typeof schedule.autoStartNext, ')');
+  if (this.settings.debugMode) console.log('═══════════════════════════════════════════════════════');
+  if (this.settings.debugMode) console.log('[COMPLETE SESSION] Session finished');
+  if (this.settings.debugMode) console.log('  Current Mode:', this.currentMode);
+  if (this.settings.debugMode) console.log('  Sessions Completed:', this.sessionsCompleted);
+  if (this.settings.debugMode) console.log('  Schedule:', schedule.name);
+  if (this.settings.debugMode) console.log('  Auto-Start Setting:', schedule.autoStartNext, '(type:', typeof schedule.autoStartNext, ')');
   
   if (this.currentMode === 'work') {
     // Pause task timer when work session ends
@@ -1166,7 +1168,7 @@ export default class EnhancedPomodoro extends Plugin {
     this.settings.sessionsCompletedCount = this.sessionsCompleted;
     await this.saveSettings();
     
-    console.log('  → Work Complete! Sessions:', this.sessionsCompleted);
+    if (this.settings.debugMode) console.log('  → Work Complete! Sessions:', this.sessionsCompleted);
     new Notice(`Work session complete!`);
     await this.logSession('work_complete');
     
@@ -1185,41 +1187,41 @@ export default class EnhancedPomodoro extends Plugin {
       if (nextPhase && (nextPhase.type === 'shortBreak' || nextPhase.type === 'longBreak')) {
         nextMode = nextPhase.type;
         nextDuration = nextPhase.duration;
-        console.log('  → Custom Sequence Next Phase:', nextPhase.name || nextPhase.type);
+        if (this.settings.debugMode) console.log('  → Custom Sequence Next Phase:', nextPhase.name || nextPhase.type);
       } else if (nextPhase && nextPhase.type === 'work') {
         // Work→Work transition (schedule wrap-around) - start next work session
-        console.log('  → Custom Sequence: Work→Work wrap-around, starting new cycle');
+        if (this.settings.debugMode) console.log('  → Custom Sequence: Work→Work wrap-around, starting new cycle');
         this.currentMode = 'work';
         this.timeRemaining = nextPhase.duration * 60;
         new Notice('Starting new work cycle!');
         this.playSound('ding');
         this.updateStatusBar();
         if (schedule.autoStartNext === true) {
-          console.log('  → Auto-start: YES - Starting work timer immediately');
+          if (this.settings.debugMode) console.log('  → Auto-start: YES - Starting work timer immediately');
           this.isRunning = true;
           this.startTimer();
         }
-        console.log('═══════════════════════════════════════════════════════');
+        if (this.settings.debugMode) console.log('═══════════════════════════════════════════════════════');
         return; // Exit early - we're starting work, not a break
       } else {
         // Fallback to legacy logic if custom sequence is malformed
         const isLongBreak = this.sessionsCompleted % 4 === 0;
         nextMode = isLongBreak ? 'longBreak' : 'shortBreak';
         nextDuration = this.getDurationForPhase(nextMode);
-        console.log('  → Fallback to Legacy Break Type:', nextMode);
+        if (this.settings.debugMode) console.log('  → Fallback to Legacy Break Type:', nextMode);
       }
     } else {
       // Legacy schedule logic
       const isLongBreak = this.sessionsCompleted % 4 === 0;
       nextMode = isLongBreak ? 'longBreak' : 'shortBreak';
       nextDuration = this.getDurationForPhase(nextMode);
-      console.log('  → Legacy Break Type:', nextMode, 'Long Break:', isLongBreak);
+      if (this.settings.debugMode) console.log('  → Legacy Break Type:', nextMode, 'Long Break:', isLongBreak);
     }
     
     this.currentMode = nextMode;
     this.timeRemaining = nextDuration * 60;
     
-    console.log('  → Next Break Duration:', Math.floor(this.timeRemaining / 60), 'minutes');
+    if (this.settings.debugMode) console.log('  → Next Break Duration:', Math.floor(this.timeRemaining / 60), 'minutes');
     
     new Notice(`Time for a ${nextMode === 'longBreak' ? 'long' : 'short'} break!`);
     
@@ -1231,27 +1233,27 @@ export default class EnhancedPomodoro extends Plugin {
     
     // Auto-start break ONLY if enabled in current schedule
     if (schedule.autoStartNext === true) {
-      console.log('  → Auto-start: YES - Starting break timer immediately');
+      if (this.settings.debugMode) console.log('  → Auto-start: YES - Starting break timer immediately');
       this.isRunning = true;
       this.startTimer();
     } else {
-      console.log('  → Auto-start: NO - Waiting for manual start');
+      if (this.settings.debugMode) console.log('  → Auto-start: NO - Waiting for manual start');
     }
   } else {
     // Coming from a break
-    console.log('  Current Break Mode:', this.currentMode);
-    console.log('  Quick Break State Exists?', !!this.quickBreakSavedState);
+    if (this.settings.debugMode) console.log('  Current Break Mode:', this.currentMode);
+    if (this.settings.debugMode) console.log('  Quick Break State Exists?', !!this.quickBreakSavedState);
     
     // Check if this was a quick break that needs state restoration
     if (this.quickBreakSavedState) {
-      console.log('  → This was a quick break - restoring previous state');
+      if (this.settings.debugMode) console.log('  → This was a quick break - restoring previous state');
       await this.restoreAfterQuickBreak();
-      console.log('═══════════════════════════════════════════════════════');
+      if (this.settings.debugMode) console.log('═══════════════════════════════════════════════════════');
       return; // Don't continue with normal break completion
     }
     
     // Normal break completion - check what's next in custom sequence
-    console.log('  → Break Complete!');
+    if (this.settings.debugMode) console.log('  → Break Complete!');
     
     // For custom sequences, advance to next phase (could be work OR another break)
     if (schedule.phases && schedule.phases.length > 0) {
@@ -1261,7 +1263,7 @@ export default class EnhancedPomodoro extends Plugin {
       if (nextPhase) {
         this.currentMode = nextPhase.type as 'work' | 'shortBreak' | 'longBreak';
         this.timeRemaining = nextPhase.duration * 60;
-        console.log('  → Custom Sequence Next Phase:', nextPhase.type, '(', nextPhase.duration, 'min)');
+        if (this.settings.debugMode) console.log('  → Custom Sequence Next Phase:', nextPhase.type, '(', nextPhase.duration, 'min)');
         
         if (nextPhase.type === 'work') {
           new Notice('Break is over! Time to work!');
@@ -1274,7 +1276,7 @@ export default class EnhancedPomodoro extends Plugin {
         // Fallback to work mode
         this.currentMode = 'work';
         this.timeRemaining = this.getDurationForPhase('work') * 60;
-        console.log('  → Fallback to default work duration');
+        if (this.settings.debugMode) console.log('  → Fallback to default work duration');
         new Notice('Break is over! Time to work!');
       }
     } else {
@@ -1293,7 +1295,7 @@ export default class EnhancedPomodoro extends Plugin {
     
     // Auto-start work timer ONLY if enabled in current schedule
     if (schedule.autoStartNext === true) {
-      console.log('  → Auto-start: YES - Starting work timer immediately');
+      if (this.settings.debugMode) console.log('  → Auto-start: YES - Starting work timer immediately');
       this.isRunning = true;
       this.startTimer();
       // CRITICAL: Resume task timer to reset lastUpdateTime and prevent break time being added
@@ -1302,10 +1304,10 @@ export default class EnhancedPomodoro extends Plugin {
         (view as any).resumeTaskTimer();
       }
     } else {
-      console.log('  → Auto-start: NO - Waiting for manual start');
+      if (this.settings.debugMode) console.log('  → Auto-start: NO - Waiting for manual start');
     }
   }
-  console.log('═══════════════════════════════════════════════════════');
+  if (this.settings.debugMode) console.log('═══════════════════════════════════════════════════════');
 }
   
   updateStatusBar(text?: string) {
@@ -1590,7 +1592,7 @@ export default class EnhancedPomodoro extends Plugin {
           // Get the container element, checking both possible locations
           const containerEl = kanbanView.containerEl || kanbanView.view?.containerEl;
           if (!containerEl) {
-            console.log('No container element found for Kanban view');
+            if (this.settings.debugMode) console.log('No container element found for Kanban view');
             continue;
           }
           
@@ -1925,6 +1927,12 @@ export default class EnhancedPomodoro extends Plugin {
     }
   }
 
+  // Clear task logs when a task is completed (prevents carryover to new tasks with same index)
+  public clearTaskLogs(taskId: string): void {
+    this.taskLogs.delete(taskId);
+    if (this.settings.debugMode) console.log('[TASK LOGS] Cleared logs for taskId:', taskId);
+  }
+
   async onunload() {
     console.log('Unloading Enhanced Pomodoro plugin...');
     
@@ -2013,6 +2021,10 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
           if (view) {
             console.log('[Settings] Updating view display');
             (view as any).updateDisplay();
+            // Also refresh the schedule display
+            if ((view as any).refreshView) {
+              (view as any).refreshView();
+            }
           } else {
             console.log('[Settings] View not yet loaded - changes will apply on next view open');
           }
@@ -2041,6 +2053,9 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
           const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
           if (view) {
             (view as any).updateDisplay();
+            if ((view as any).refreshView) {
+              (view as any).refreshView();
+            }
           }
         })
         .setDynamicTooltip()
@@ -2067,6 +2082,9 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
           const view = this.plugin.app.workspace.getLeavesOfType('circular-timer-view')[0]?.view;
           if (view) {
             (view as any).updateDisplay();
+            if ((view as any).refreshView) {
+              (view as any).refreshView();
+            }
           }
         })
         .setDynamicTooltip()
@@ -2096,6 +2114,9 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     const kanbanBoardSetting = new Setting(containerEl)
       .setName('Kanban Board')
       .setDesc('Select a Kanban board to open and track tasks from');
+
+    // Add class for vertical stacking layout
+    kanbanBoardSetting.settingEl.classList.add('kanban-board-setting-vertical');
 
     // Add refresh button
     kanbanBoardSetting.addButton(button => {
@@ -2904,7 +2925,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     }
     
     await this.plugin.saveSettings();
-    console.log('[SETTINGS] Updated main column mapping:', columnType, '=', columnName, 'for', boardPath);
+    if (this.plugin.settings.debugMode) console.log('[SETTINGS] Updated main column mapping:', columnType, '=', columnName, 'for', boardPath);
     this.refreshSidebarAfterSettingsChange();
   }
 
@@ -2922,7 +2943,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
     }
     this.plugin.settings.perBoardColumnOrder[boardPath] = order;
     await this.plugin.saveSettings();
-    console.log('[SETTINGS] Moved column in order for', boardPath, ':', order);
+    if (this.plugin.settings.debugMode) console.log('[SETTINGS] Moved column in order for', boardPath, ':', order);
     this.refreshSidebarAfterSettingsChange();
   }
 
@@ -3033,7 +3054,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
         if (headerMatch) {
           const existingColumn = headerMatch[1].replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim().toLowerCase();
           if (existingColumn === normalizedColumnName) {
-            console.log('[KANBAN] Column already exists:', columnName);
+            if (this.plugin.settings.debugMode) console.log('[KANBAN] Column already exists:', columnName);
             return false; // Column already exists
           }
         }
@@ -3054,7 +3075,7 @@ class EnhancedPomodoroSettingTab extends PluginSettingTab {
       lines.splice(insertIndex, 0, newColumnContent);
       
       await this.app.vault.modify(file, lines.join('\n'));
-      console.log('[KANBAN] Added new column:', columnName, 'to', boardPath);
+      if (this.plugin.settings.debugMode) console.log('[KANBAN] Added new column:', columnName, 'to', boardPath);
       
       new Notice(`Added column "${columnName}" to Kanban board`);
       return true;
@@ -3479,7 +3500,7 @@ class ProgressColumnConfigModal extends Modal {
   }
 
   onOpen() {
-    console.log('[PROGRESS MODAL] Opening new chips-based modal');
+    if (this.plugin.settings.debugMode) console.log('[PROGRESS MODAL] Opening new chips-based modal');
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass('column-config-modal');
@@ -3487,7 +3508,7 @@ class ProgressColumnConfigModal extends Modal {
     // Add CSS styles
     this.addStyles();
 
-    console.log('[PROGRESS MODAL] Creating header and content');
+    if (this.plugin.settings.debugMode) console.log('[PROGRESS MODAL] Creating header and content');
     contentEl.createEl('h2', { text: '📋 Column & Schedule Configuration' });
     contentEl.createEl('p', { 
       text: 'Drag chips to reorder columns. Drag to the "Unused" area to disable a column.',
@@ -3765,7 +3786,7 @@ class ProgressColumnConfigModal extends Modal {
   }
 
   private async moveChip(boardPath: string, fromIndex: number, toIndex: number) {
-    console.log('[COLUMN ORDER] moveChip called for board:', boardPath);
+    if (this.plugin.settings.debugMode) console.log('[COLUMN ORDER] moveChip called for board:', boardPath);
     const defaultColumns = ['📋 To Do', '🚧 In Progress', '✅ Done'];
     const activeOrder = [...(this.plugin.settings.perBoardColumnOrder?.[boardPath] || defaultColumns)];
     
@@ -3778,9 +3799,9 @@ class ProgressColumnConfigModal extends Modal {
       this.plugin.settings.perBoardColumnOrder = {};
     }
     this.plugin.settings.perBoardColumnOrder[boardPath] = activeOrder;
-    console.log('[COLUMN ORDER] Saving order for board:', boardPath, activeOrder);
+    if (this.plugin.settings.debugMode) console.log('[COLUMN ORDER] Saving order for board:', boardPath, activeOrder);
     await this.plugin.saveSettings();
-    console.log('[COLUMN ORDER] All board orders:', JSON.stringify(this.plugin.settings.perBoardColumnOrder));
+    if (this.plugin.settings.debugMode) console.log('[COLUMN ORDER] All board orders:', JSON.stringify(this.plugin.settings.perBoardColumnOrder));
     
     // Re-render
     const configContainer = document.querySelector('.config-container') as HTMLElement;
@@ -3799,16 +3820,16 @@ class ProgressColumnConfigModal extends Modal {
       const editBtn = chip.createEl('button', { text: '✏️', cls: 'chip-btn edit' });
       editBtn.onclick = (e) => {
         e.stopPropagation();
-        console.log('[SCHEDULE EDIT] Edit button clicked for', type, 'at index', index);
+        if (this.plugin.settings.debugMode) console.log('[SCHEDULE EDIT] Edit button clicked for', type, 'at index', index);
         new InputModal(
           this.app,
           `Edit ${type} Duration`,
           'Duration in minutes',
           duration.toString(),
           async (newDuration) => {
-            console.log('[SCHEDULE EDIT] User entered:', newDuration);
+            if (this.plugin.settings.debugMode) console.log('[SCHEDULE EDIT] User entered:', newDuration);
             if (newDuration && !isNaN(parseInt(newDuration))) {
-              console.log('[SCHEDULE EDIT] Updating duration to', parseInt(newDuration));
+              if (this.plugin.settings.debugMode) console.log('[SCHEDULE EDIT] Updating duration to', parseInt(newDuration));
               await this.updatePhaseDuration(boardPath, index, parseInt(newDuration));
               // Find parent config container and re-render
               const configContainer = container.closest('.config-container') as HTMLElement;
@@ -3978,7 +3999,7 @@ class ProgressColumnConfigModal extends Modal {
   }
 
   private async updateMainColumnMapping(boardPath: string, columnType: 'todo' | 'progress' | 'done', columnName: string) {
-    console.log('[MAIN COLUMNS] updateMainColumnMapping called for board:', boardPath, 'type:', columnType, 'value:', columnName);
+    if (this.plugin.settings.debugMode) console.log('[MAIN COLUMNS] updateMainColumnMapping called for board:', boardPath, 'type:', columnType, 'value:', columnName);
     if (!this.plugin.settings.perBoardMainColumns) {
       this.plugin.settings.perBoardMainColumns = {};
     }
@@ -4022,7 +4043,7 @@ class ProgressColumnConfigModal extends Modal {
     }
     
     await this.plugin.saveSettings();
-    console.log('[MAIN COLUMNS] Updated', columnType, 'to', columnName, 'for board', boardPath);
+    if (this.plugin.settings.debugMode) console.log('[MAIN COLUMNS] Updated', columnType, 'to', columnName, 'for board', boardPath);
   }
 
   private async addPhaseToSchedule(boardPath: string, type: string, duration: number) {
