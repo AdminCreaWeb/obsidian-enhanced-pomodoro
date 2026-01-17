@@ -142,6 +142,9 @@ Sessions are logged to `Pomodoro Log.md` (configurable):
 
 Based on [obsidian-pomodoro-timer](https://github.com/eatgrass/obsidian-pomodoro-timer) by eatgrass.
 
+### Development
+This plugin was developed through **vibe-coding** - a collaborative approach where the author (Stefan) provided the vision, debugging, and direction while AI coding assistants (primarily Claude/Cascade, with contributions from other AI agents) handled the TypeScript implementation. This allowed rapid development despite the author not having prior TypeScript experience.
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) for details.
