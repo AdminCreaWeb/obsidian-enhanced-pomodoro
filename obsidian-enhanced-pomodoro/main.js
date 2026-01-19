@@ -3780,6 +3780,10 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
       if (this.statusBarText) {
         this.statusBarText.addClass("clickable");
         this.statusBarText.onClickEvent(() => this.togglePause());
+        this.statusBarText.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          this.showStatusBarContextMenu(e);
+        });
         this.updateStatusBar();
       }
       this.addRibbonIcon("timer", "Show Pomodoro Timer", () => {
@@ -4430,6 +4434,46 @@ var EnhancedPomodoro = class extends import_obsidian2.Plugin {
     this.statusBarText.setText(
       `${modeEmoji} ${statusText}${minutes}:${seconds.toString().padStart(2, "0")}`
     );
+  }
+  // Show context menu when right-clicking the status bar timer
+  showStatusBarContextMenu(e) {
+    const menu = new import_obsidian2.Menu();
+    if (this.isRunning) {
+      menu.addItem((item) => {
+        item.setTitle("\u23F8\uFE0F Pause Timer").setIcon("pause").onClick(() => this.togglePause());
+      });
+    } else {
+      menu.addItem((item) => {
+        item.setTitle("\u25B6\uFE0F Start Timer").setIcon("play").onClick(() => this.startPomodoro());
+      });
+    }
+    menu.addItem((item) => {
+      item.setTitle("\u{1F504} Reset Timer").setIcon("rotate-ccw").onClick(() => this.resetTimer());
+    });
+    menu.addSeparator();
+    if (this.currentMode === "work") {
+      menu.addItem((item) => {
+        item.setTitle(`\u2615 Quick Break (${this.settings.quickBreakDuration}min)`).setIcon("coffee").onClick(() => this.startQuickBreak());
+      });
+    }
+    menu.addItem((item) => {
+      item.setTitle("\u23ED\uFE0F Skip to Next Phase").setIcon("skip-forward").onClick(() => this.skipToNextPhase());
+    });
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item.setTitle("\u{1F4CB} Open Sidebar").setIcon("layout-sidebar-right").onClick(() => this.activateView());
+    });
+    menu.addItem((item) => {
+      item.setTitle("\u2699\uFE0F Settings").setIcon("settings").onClick(() => {
+        this.app.setting.open();
+        this.app.setting.openTabById("enhanced-pomodoro-timer");
+      });
+    });
+    menu.showAtMouseEvent(e);
+  }
+  // Skip to next phase (work -> break or break -> work)
+  skipToNextPhase() {
+    this.completeSession(true);
   }
   getTotalTime() {
     const schedule = this.getCurrentSchedule();

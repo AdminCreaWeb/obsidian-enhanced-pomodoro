@@ -50,7 +50,7 @@ const kanbanStyles = `
   text-align: center;
 }
 `;
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Workspace, PluginManifest, TFile } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Workspace, PluginManifest, TFile, Menu } from 'obsidian';
 
 // Extend the App interface to include the plugins property
 declare module 'obsidian' {
@@ -430,6 +430,13 @@ export default class EnhancedPomodoro extends Plugin {
       if (this.statusBarText) {
         this.statusBarText.addClass('clickable');
         this.statusBarText.onClickEvent(() => this.togglePause());
+        
+        // Add right-click context menu
+        this.statusBarText.addEventListener('contextmenu', (e: MouseEvent) => {
+          e.preventDefault();
+          this.showStatusBarContextMenu(e);
+        });
+        
         this.updateStatusBar();
       }
       
@@ -1328,6 +1335,78 @@ export default class EnhancedPomodoro extends Plugin {
     this.statusBarText.setText(
       `${modeEmoji} ${statusText}${minutes}:${seconds.toString().padStart(2, '0')}`
     );
+  }
+  
+  // Show context menu when right-clicking the status bar timer
+  showStatusBarContextMenu(e: MouseEvent) {
+    const menu = new Menu();
+    
+    // Start/Pause option
+    if (this.isRunning) {
+      menu.addItem((item) => {
+        item.setTitle('⏸️ Pause Timer')
+          .setIcon('pause')
+          .onClick(() => this.togglePause());
+      });
+    } else {
+      menu.addItem((item) => {
+        item.setTitle('▶️ Start Timer')
+          .setIcon('play')
+          .onClick(() => this.startPomodoro());
+      });
+    }
+    
+    // Reset timer
+    menu.addItem((item) => {
+      item.setTitle('🔄 Reset Timer')
+        .setIcon('rotate-ccw')
+        .onClick(() => this.resetTimer());
+    });
+    
+    menu.addSeparator();
+    
+    // Quick break (only show if timer is running work session)
+    if (this.currentMode === 'work') {
+      menu.addItem((item) => {
+        item.setTitle(`☕ Quick Break (${this.settings.quickBreakDuration}min)`)
+          .setIcon('coffee')
+          .onClick(() => this.startQuickBreak());
+      });
+    }
+    
+    // Skip to next phase
+    menu.addItem((item) => {
+      item.setTitle('⏭️ Skip to Next Phase')
+        .setIcon('skip-forward')
+        .onClick(() => this.skipToNextPhase());
+    });
+    
+    menu.addSeparator();
+    
+    // Open sidebar
+    menu.addItem((item) => {
+      item.setTitle('📋 Open Sidebar')
+        .setIcon('layout-sidebar-right')
+        .onClick(() => this.activateView());
+    });
+    
+    // Open settings
+    menu.addItem((item) => {
+      item.setTitle('⚙️ Settings')
+        .setIcon('settings')
+        .onClick(() => {
+          (this.app as any).setting.open();
+          (this.app as any).setting.openTabById('enhanced-pomodoro-timer');
+        });
+    });
+    
+    menu.showAtMouseEvent(e);
+  }
+  
+  // Skip to next phase (work -> break or break -> work)
+  private skipToNextPhase() {
+    // Use completeSession with manual trigger flag to skip debounce
+    this.completeSession(true);
   }
   
   getTotalTime(): number {

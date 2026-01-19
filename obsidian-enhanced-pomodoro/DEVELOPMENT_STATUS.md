@@ -1,6 +1,47 @@
 # Enhanced Pomodoro Timer - Development Status
 
-## 🎯 Latest Update (Jan 8, 2026 - Custom Schedule & Settings Refactoring)
+## 🎯 Latest Update (Jan 19, 2026 - Status Bar Context Menu & Bug Fixes)
+
+### ✅ **v1.0.2 - Status Bar Context Menu - NEW**
+- **Right-Click Menu**: Right-click the status bar timer (bottom right) for quick actions
+- **Menu Options**:
+  - ▶️ Start / ⏸️ Pause Timer
+  - 🔄 Reset Timer
+  - ☕ Quick Break (during work sessions)
+  - ⏭️ Skip to Next Phase
+  - 📋 Open Sidebar
+  - ⚙️ Settings
+- **No Sidebar Required**: Full control without opening the sidebar panel
+
+### ✅ **v1.0.1 - Bug Fixes (Jan 17, 2026)**
+- **Schedule Display Fix**: Sidebar schedule (🍅25m ☕5m 🌴15m) now updates immediately when changing duration settings
+- **Kanban Board Settings Layout**: Label and description stacked vertically above controls
+- **Task Logs/Timer Carryover Fix**: Completed task data no longer carries over to new tasks
+- **Manual Kanban Tab Refresh**: Auto-refreshes on tab switch
+- **Settings Button**: Opens plugin settings directly
+- **Debug Logs Cleanup**: Verbose logs wrapped in `debugMode` check
+
+### 📋 **Quick Git Summary (Jan 19, 2026)**
+```bash
+# v1.0.2 - Status Bar Context Menu (Jan 19, 2026)
+feat: Right-click context menu on status bar timer
+- Start/Pause, Reset, Quick Break, Skip Phase
+- Open Sidebar, Settings access
+- Works without sidebar for non-sidebar users
+
+# v1.0.1 - Bug Fixes (Jan 17, 2026)
+fix: Schedule display updates when durations change
+fix: Kanban board settings layout (vertical stacking)
+fix: Task logs/timer carryover to new tasks
+fix: Manual Kanban tab auto-refresh
+fix: Settings button opens plugin settings directly
+refactor: Debug logs wrapped in debugMode check
+docs: Added screenshots, vibe-coding acknowledgment
+```
+
+---
+
+## 🎯 Previous Update (Jan 8, 2026 - Custom Schedule & Settings Refactoring)
 **Major Features & Bug Fixes:**
 
 ### ✅ **Custom Schedule System - Complete Overhaul**
