@@ -220,6 +220,7 @@
             <button id="viewHistory">View Downloads</button>
             <button id="clearHistory">Clear History</button>
             <button id="viewBackupStatus">📊 Backup Status</button>
+            <button id="showHelp" style="background: #17a2b8; color: white; border: 1px solid #138496;">❓ Help</button>
             <button id="testStructure">🔍 Debug Page</button>
             <button id="debugSettingsBtn">🔧 Show Settings</button>
         </div>
@@ -397,6 +398,45 @@
                 <div id="historyList" style="margin: 15px 0; max-height: 400px; overflow-y: auto; font-size: 0.85em;"></div>
                 <div style="text-align: right; margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee;">
                     <button id="closeHistory" style="background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Help Modal -->
+        <div id="helpModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 1000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 20px; min-width: 480px; max-width: 95vw; max-height: 85vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+                <h3 style="margin-top: 0; color: #17a2b8; border-bottom: 2px solid #17a2b8; padding-bottom: 10px;">❓ Quick Guide</h3>
+                
+                <div style="margin-bottom: 15px;">
+                    <h4 style="color: #28a745; margin: 10px 0 5px 0;">📥 Download (Full Backup button)</h4>
+                    <p style="margin: 0; font-size: 0.9em; color: #555;">Saves conversations as .md files to your computer. Use this for permanent backups you want to keep.</p>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <h4 style="color: #007bff; margin: 10px 0 5px 0;">🔄 Auto-Backup</h4>
+                    <p style="margin: 0; font-size: 0.9em; color: #555;">Automatically saves conversations every few minutes <em>inside the extension</em>. No files downloaded until you export. Great for "set and forget" protection.</p>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <h4 style="color: #e65100; margin: 10px 0 5px 0;">📦 Import</h4>
+                    <p style="margin: 0; font-size: 0.9em; color: #555;">Bring back old Duck.ai backup files (.txt/.md) you saved before. Useful if you have old exports and want them in one place.</p>
+                </div>
+                
+                <div style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin: 15px 0;">
+                    <h4 style="margin: 0 0 8px 0; color: #333;">💡 Which should I use?</h4>
+                    <ul style="margin: 0; padding-left: 20px; font-size: 0.85em; color: #555;">
+                        <li><strong>New user?</strong> → Enable Auto-Backup, then do a Full Backup once a week</li>
+                        <li><strong>Have old backups?</strong> → Import them first, then use Full Backup</li>
+                        <li><strong>Want files on disk?</strong> → Use Full Backup or export from Auto-Backup</li>
+                    </ul>
+                </div>
+                
+                <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; font-size: 0.85em;">
+                    <strong>⚠️ Note:</strong> Old conversations that Duck.ai no longer has content for will be skipped during Full Backup if you've already imported them.
+                </div>
+                
+                <div style="text-align: right; margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee;">
+                    <button id="closeHelp" style="background: #17a2b8; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 500;">Got it!</button>
                 </div>
             </div>
         </div>

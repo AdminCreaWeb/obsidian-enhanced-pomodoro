@@ -2959,6 +2959,15 @@ document.getElementById("closeHistory").addEventListener("click", () => {
   document.getElementById("historyModal").style.display = "none";
 });
 
+// Help modal handlers
+document.getElementById("showHelp").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "block";
+});
+
+document.getElementById("closeHelp").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "none";
+});
+
 document.getElementById("clearHistory").addEventListener("click", async () => {
   const modal = document.createElement("div");
   modal.style.cssText = `
