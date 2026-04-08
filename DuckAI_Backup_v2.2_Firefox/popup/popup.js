@@ -1411,12 +1411,14 @@ refreshBtn.addEventListener("click", async () => {
 
     const duplicateCount = downloadResults.filter((r) => r.isDuplicate).length;
     const upgradeCount = downloadResults.filter((r) => r.isUpgrade).length;
-    const newCount = checkedItems.length - duplicateCount - upgradeCount;
+    const skippedCount = downloadResults.filter((r) => r.skipped).length;
+    const newCount = checkedItems.length - duplicateCount - upgradeCount - skippedCount;
 
     let summary = `✅ Full Backup Complete! `;
     if (newCount > 0) summary += `${newCount} new, `;
     if (upgradeCount > 0) summary += `${upgradeCount} upgraded, `;
     if (duplicateCount > 0) summary += `${duplicateCount} duplicates`;
+    if (skippedCount > 0) summary += `, ${skippedCount} skipped (in imports)`;
 
     statusEl.textContent = summary;
     hideProgress();
@@ -2179,6 +2181,33 @@ async function downloadSingleConversation(conversation, index, total) {
   const isFullContent =
     contentSource === "main_content" || contentSource === "localStorage";
   const backupType = isFullContent ? "FULL" : "PARTIAL";
+  
+  // Check if this is an empty/title-only conversation that already exists as a manual import
+  // Skip downloading empty files when we already have the content from import
+  if (!isFullContent && (contentSource === "title_only" || contentSource === "sidebar_text" || !content || content === "No content available" || content.length < 50)) {
+    try {
+      const importResult = await browser.storage.local.get('manualImports');
+      const imports = importResult.manualImports || {};
+      
+      // Check if any import matches this title (fuzzy match - first 50 chars)
+      const titlePrefix = title.substring(0, 50).toLowerCase();
+      const matchingImport = Object.values(imports).find(imp => 
+        imp.title && imp.title.substring(0, 50).toLowerCase() === titlePrefix
+      );
+      
+      if (matchingImport) {
+        console.log(`⏭️ Skipping "${title}" - already exists as manual import with full content`);
+        return { 
+          skipped: true, 
+          reason: 'exists_as_import',
+          importTitle: matchingImport.title
+        };
+      }
+    } catch (e) {
+      console.log('Could not check imports:', e);
+    }
+  }
+  
   const dateStr = new Date().toISOString().split("T")[0];
   const filename = await generateFilename(index, title, backupType, dateStr);
 
