@@ -122,7 +122,7 @@ function initAutoBackupUI() {
   // View backups modal
   viewAutoBackupsBtn.addEventListener("click", async () => {
     await renderAutoBackupList();
-    autoBackupModal.style.display = 'block';
+    autoBackupModal.style.display = 'flex';
   });
 
   // Also handle the always-visible view button
@@ -130,7 +130,7 @@ function initAutoBackupUI() {
   if (viewAutoBackupsAlways) {
     viewAutoBackupsAlways.addEventListener("click", async () => {
       await renderAutoBackupList();
-      autoBackupModal.style.display = 'block';
+      autoBackupModal.style.display = 'flex';
     });
   }
 
@@ -138,6 +138,14 @@ function initAutoBackupUI() {
   closeAutoBackupModalBtn.addEventListener("click", () => {
     autoBackupModal.style.display = 'none';
   });
+
+  // Top close button
+  const closeAutoBackupModalTopBtn = document.getElementById("closeAutoBackupModalTop");
+  if (closeAutoBackupModalTopBtn) {
+    closeAutoBackupModalTopBtn.addEventListener("click", () => {
+      autoBackupModal.style.display = 'none';
+    });
+  }
 
   autoBackupModal.addEventListener("click", (e) => {
     if (e.target === autoBackupModal) {
@@ -197,7 +205,7 @@ function initAutoBackupUI() {
             <span style="font-size: 0.75em; color: #666; margin-left: 8px;">${versions.length}v</span>
           </div>
           <div style="font-size: 0.75em; color: #666; margin-bottom: 6px;">📅 ${latestDate}</div>
-          <button data-hash="${hash}" class="export-latest-btn" style="width: 100%; font-size: 0.75em; padding: 4px 8px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer;">📥 Export</button>
+          <button data-hash="${hash}" class="export-latest-btn" style="font-size: 0.75em; padding: 4px 10px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer;">📥 Export</button>
         </div>
       `;
     }
@@ -333,7 +341,7 @@ model: ${version.model || 'unknown'}
         statusEl.textContent = `✅ Imported: "${parsed.title.substring(0, 30)}..."`;
         
         // Refresh the backup list if modal is open
-        if (autoBackupModal.style.display === 'block') {
+        if (autoBackupModal.style.display === 'flex') {
           await renderAutoBackupList();
         }
         

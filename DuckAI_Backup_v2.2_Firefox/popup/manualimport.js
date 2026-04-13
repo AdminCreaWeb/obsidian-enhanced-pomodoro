@@ -153,6 +153,14 @@ function initManualImportUI() {
         });
     }
     
+    // Top close button for import modal
+    const closeImportFileModalTop = document.getElementById('closeImportFileModalTop');
+    if (closeImportFileModalTop) {
+        closeImportFileModalTop.addEventListener('click', () => {
+            if (importFileModal) importFileModal.style.display = 'none';
+        });
+    }
+    
     // Drop zone click
     if (dropZone && importFileInput) {
         dropZone.addEventListener('click', () => {
@@ -199,6 +207,14 @@ function initManualImportUI() {
     // Close imports list modal
     if (closeModalBtn) {
         closeModalBtn.addEventListener('click', () => {
+            document.getElementById('manualImportsModal').style.display = 'none';
+        });
+    }
+    
+    // Top close button for manual imports modal
+    const closeModalBtnTop = document.getElementById('closeManualImportsModalTop');
+    if (closeModalBtnTop) {
+        closeModalBtnTop.addEventListener('click', () => {
             document.getElementById('manualImportsModal').style.display = 'none';
         });
     }
@@ -407,7 +423,7 @@ async function showManualImports() {
         });
     }
     
-    modal.style.display = 'block';
+    modal.style.display = 'flex';
 }
 
 // Delete a manual import

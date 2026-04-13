@@ -319,20 +319,29 @@ function extractFromLocalStorage() {
     const sidebarTitles = [];
     const allDivsWithTitle = Array.from(document.querySelectorAll("div[title]"));
     
-    const uiKeywords = ["button", "menu", "settings", "close", "open", "hide", "show", "expand", "collapse"];
+    const uiKeywords = ["button", "menu", "settings", "close", "open", "hide", "show", "expand", "collapse", "toggle", "click"];
     
     for (const el of allDivsWithTitle) {
-      const title = el.title || "";
-      if (title.length < 5) continue;
-      if (uiKeywords.some((keyword) => title.toLowerCase().includes(keyword))) continue;
+      let title = el.title || "";
+      if (title.length < 3) continue;
+      if (uiKeywords.some((keyword) => title.toLowerCase() === keyword)) continue;
       
       const role = el.getAttribute("role");
       if (role === "button" || role === "link") continue;
       
-      const titleWords = title.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-      if (titleWords.length < 2) continue;
+      // Some locked chats have full content in title attribute (with newlines)
+      // Extract just the first line as the actual title
+      if (title.includes('\n')) {
+        title = title.split('\n')[0].trim();
+        console.log(`📋 Extracted title from multi-line: "${title.substring(0, 50)}..."`);
+      }
       
-      sidebarTitles.push(title.trim());
+      if (title.trim().length < 3) continue;
+      
+      // Avoid duplicates
+      if (!sidebarTitles.includes(title.trim())) {
+        sidebarTitles.push(title.trim());
+      }
     }
     
     console.log(`📋 Found ${sidebarTitles.length} conversation titles in HTML sidebar`);
@@ -431,7 +440,7 @@ function extractFromLocalStorage() {
       
       console.log(`🔎 Analyzing "${sidebarTitle.substring(0, 40)}..." - ${sidebarWords.length} keywords`);
       
-      if (sidebarWords.length >= 2) { // Lowered threshold from 3 to 2
+      if (sidebarWords.length >= 2) {
         for (let i = 0; i < results.length; i++) {
           const result = results[i];
           if (result.contentSource !== 'localStorage') continue;
@@ -450,11 +459,15 @@ function extractFromLocalStorage() {
             normalizedTitle.includes(word)
           ).length;
           
-          const minRequired = Math.min(2, sidebarWords.length); // At least 2 words match
+          // Require BOTH strategies to match (AND instead of OR)
+          // This prevents false matches between different conversations about similar topics
+          const forwardMatchRatio = matchCount / sidebarWords.length;
+          const reverseMatchRatio = reverseMatchCount / resultWords.length;
           
-          if (matchCount >= minRequired || reverseMatchCount >= 2) {
+          // Need at least 40% of words matching in BOTH directions
+          if (forwardMatchRatio >= 0.4 && reverseMatchRatio >= 0.4) {
             console.log(`🔄 [RENAMED MATCH] "${result.title.substring(0, 30)}..." → "${sidebarTitle.substring(0, 30)}..."`);
-            console.log(`   Match score: ${matchCount}/${sidebarWords.length} forward, ${reverseMatchCount}/${resultWords.length} reverse`);
+            console.log(`   Match score: ${matchCount}/${sidebarWords.length} forward (${(forwardMatchRatio*100).toFixed(0)}%), ${reverseMatchCount}/${resultWords.length} reverse (${(reverseMatchRatio*100).toFixed(0)}%)`);
             result.title = sidebarTitle; // Use the NEW title from sidebar
             result.renamedFrom = result.title; // Track original title
             foundMatch = true;
@@ -469,11 +482,12 @@ function extractFromLocalStorage() {
       }
 
       // This chat is in sidebar but NOT in localStorage - add as partial backup
+      // Click-captured chats will be merged later in the popup context
       const contentHash = generateContentHash(sidebarTitle, sidebarTitle);
       
       results.push({
         title: sidebarTitle,
-        content: `*This conversation was found in the sidebar but full content is not available in localStorage.*\n\n**Title:** ${sidebarTitle}\n\n*To get full content, click on this conversation in Duck.ai to load it into localStorage, then run the backup again.*`,
+        content: `*This conversation was found in the sidebar but full content is not available in localStorage.*\n\n**Title:** ${sidebarTitle}\n\n*To get full content, click on this conversation in Duck.ai to capture it automatically.*`,
         html: "",
         contentHash: contentHash,
         contentSource: "sidebar_only",
@@ -488,20 +502,20 @@ function extractFromLocalStorage() {
 
       sidebarOnlyCount++;
       console.log(
-        `⚠️ [sidebar_only] "${sidebarTitle.substring(0, 50)}..." - NOT in localStorage (too old or not loaded)`,
+        `⚠️ [sidebar_only] "${sidebarTitle.substring(0, 50)}..." - NOT in localStorage (click it on Duck.ai to capture)`,
       );
     }
 
     console.log(`\n📊 SUMMARY:`);
     console.log(`   ✅ Full backups (localStorage): ${results.length - sidebarOnlyCount}`);
     console.log(`   🔄 Renamed matches: ${renamedMatchCount}`);
-    console.log(`   ⚠️ Partial backups (sidebar only): ${sidebarOnlyCount}`);
+    console.log(`   ⚠️ Sidebar only (not captured): ${sidebarOnlyCount}`);
     console.log(`\n💡 TIP: Duck.ai only keeps ~6 recent chats in localStorage.`);
-    console.log(`   To backup older chats with full content: Click them in Duck.ai sidebar, then run backup again.`);
+    console.log(`   Click chats in Duck.ai sidebar to auto-capture them, then run backup again.`);
 
     if (sidebarOnlyCount > 0) {
-      console.log(`\n📢 Found ${sidebarOnlyCount} chats in sidebar but NOT in localStorage`);
-      console.log(`   These are likely older conversations. Click each one to load its full content.`);
+      console.log(`\n📢 Found ${sidebarOnlyCount} chats not yet captured`);
+      console.log(`   Click each one in Duck.ai sidebar to auto-capture full content.`);
     }
 
     if (renamedMatchCount > 0) {
@@ -1151,7 +1165,32 @@ async function renderTitlesOnly() {
         conversation.contentSource === "sidebar_text" ||
         conversation.contentSource === "title_only";
 
-      if (isTitlesOnly) {
+      // Click-captured chats have full content from click-detection
+      const isCaptured = conversation.contentSource === "click_captured";
+
+      if (isCaptured) {
+        // Captured via click-detection - show 🔍 icon
+        const existingBackup = downloadedFiles.find(
+          (f) => f.title === conversation.title,
+        );
+        if (existingBackup) {
+          status = {
+            icon: "🔍",
+            label: `Click-captured & backed up (${new Date(existingBackup.timestamp).toLocaleDateString()})`,
+            color: "#6f42c1",
+            opacity: "1",
+            bold: false,
+          };
+        } else {
+          status = {
+            icon: "🔍",
+            label: `Click-captured (${conversation.messageCount || '?'} messages) - ready to backup`,
+            color: "#6f42c1",
+            opacity: "1",
+            bold: false,
+          };
+        }
+      } else if (isTitlesOnly) {
         // Simple check: does backup exist for this title?
         const existingBackup = downloadedFiles.find(
           (f) => f.title === conversation.title,
@@ -1455,6 +1494,33 @@ async function loadTitlesOnly() {
         index: index,
       }));
 
+      // Merge click-captured chats into cached results too
+      try {
+        const capturedChats = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+        if (capturedChats && Object.keys(capturedChats).length > 0) {
+          let mergedCount = 0;
+          for (const conv of conversationData) {
+            if (conv.contentSource === 'sidebar_only') {
+              const capturedKey = conv.title.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+              const captured = capturedChats[capturedKey];
+              if (captured && captured.content) {
+                conv.content = captured.content;
+                conv.contentSource = 'click_captured';
+                conv.messageCount = captured.messageCount || 0;
+                conv.model = captured.model || 'unknown';
+                conv.timestamp = captured.capturedAt || conv.timestamp;
+                mergedCount++;
+              }
+            }
+          }
+          if (mergedCount > 0) {
+            console.log(`🔍 Merged ${mergedCount} click-captured chats into cached results`);
+          }
+        }
+      } catch (e) {
+        console.log('Could not merge captured chats into cached data:', e);
+      }
+
       const cacheInfo = await getCacheInfo();
       statusEl.textContent = `✓ Loaded ${cachedData.length} conversations (cached, expires in ${cacheInfo.remainingMinutes}min)`;
       await renderTitlesOnly();
@@ -1492,6 +1558,33 @@ async function loadTitlesOnly() {
 
     conversationData = results[0].result;
     usingCachedData = false;
+
+    // Merge click-captured chats into the results
+    try {
+      const capturedChats = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+      if (capturedChats && Object.keys(capturedChats).length > 0) {
+        let mergedCount = 0;
+        for (const conv of conversationData) {
+          if (conv.contentSource === 'sidebar_only') {
+            const capturedKey = conv.title.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+            const captured = capturedChats[capturedKey];
+            if (captured && captured.content) {
+              conv.content = captured.content;
+              conv.contentSource = 'click_captured';
+              conv.messageCount = captured.messageCount || 0;
+              conv.model = captured.model || 'unknown';
+              conv.timestamp = captured.capturedAt || conv.timestamp;
+              mergedCount++;
+            }
+          }
+        }
+        if (mergedCount > 0) {
+          console.log(`🔍 Merged ${mergedCount} click-captured chats into results`);
+        }
+      }
+    } catch (e) {
+      console.log('Could not merge captured chats:', e);
+    }
 
     // Check if we got valid data
     if (!conversationData || !Array.isArray(conversationData)) {
@@ -1600,6 +1693,33 @@ async function loadConversations() {
     }
 
     conversationData = result;
+
+    // Merge click-captured chats into the results
+    try {
+      const capturedChats = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+      if (capturedChats && Object.keys(capturedChats).length > 0) {
+        let mergedCount = 0;
+        for (const conv of conversationData) {
+          if (conv.contentSource === 'sidebar_only') {
+            const capturedKey = conv.title.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+            const captured = capturedChats[capturedKey];
+            if (captured && captured.content) {
+              conv.content = captured.content;
+              conv.contentSource = 'click_captured';
+              conv.messageCount = captured.messageCount || 0;
+              conv.model = captured.model || 'unknown';
+              conv.timestamp = captured.capturedAt || conv.timestamp;
+              mergedCount++;
+            }
+          }
+        }
+        if (mergedCount > 0) {
+          console.log(`🔍 Merged ${mergedCount} click-captured chats into results`);
+        }
+      }
+    } catch (e) {
+      console.log('Could not merge captured chats:', e);
+    }
 
     if (
       !conversationData ||
@@ -2632,37 +2752,79 @@ document
       ).length;
       statusCounts.legacy = legacyBackups;
 
-      // Get auto-backup and manual import counts
+      // Get auto-backup and manual import counts + full data for cross-matching
       let autoBackupCount = 0;
       let manualImportCount = 0;
+      let capturedCount = 0;
+      let autoBackupData = {};
+      let manualImports = {};
+      let capturedChats = {};
       try {
         const autoBackupResult = await browser.storage.local.get('autoBackupData');
-        const autoBackupData = autoBackupResult.autoBackupData || {};
+        autoBackupData = autoBackupResult.autoBackupData || {};
         autoBackupCount = Object.keys(autoBackupData).length;
         
         const manualImportResult = await browser.storage.local.get('manualImports');
-        const manualImports = manualImportResult.manualImports || {};
+        manualImports = manualImportResult.manualImports || {};
         manualImportCount = Object.keys(manualImports).length;
+        
+        const capturedResult = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+        capturedChats = capturedResult || {};
+        capturedCount = Object.keys(capturedChats).length;
       } catch (e) {
         console.log('Could not fetch backup counts:', e);
       }
+      
+      // Build title-based lookup maps for cross-matching
+      const normalizeTitle = (t) => (t || '').substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      const capturedByTitle = {};
+      for (const [key, entry] of Object.entries(capturedChats)) {
+        capturedByTitle[normalizeTitle(entry.title)] = entry;
+      }
+      const autoBackupByTitle = {};
+      for (const [key, entry] of Object.entries(autoBackupData)) {
+        autoBackupByTitle[normalizeTitle(entry.title)] = entry;
+      }
+      const importByTitle = {};
+      for (const [key, entry] of Object.entries(manualImports)) {
+        importByTitle[normalizeTitle(entry.title)] = entry;
+      }
 
       let modalHTML = `
-      <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; display: flex; align-items: center; justify-content: center;">
-        <div style="background: white; border-radius: 12px; padding: 25px; max-width: 650px; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
-          <h3 style="margin: 0 0 15px 0; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px;">📊 Backup Status Report</h3>
+      <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding-top: 20px; overflow: auto; box-sizing: border-box;">
+        <div style="background: white; border-radius: 12px; padding: 0; width: 400px; max-height: 550px; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.3); overflow: hidden;">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 2px solid #007bff; background: white; flex-shrink: 0;">
+            <h3 style="margin: 0; color: #333; font-size: 1em;">📊 Backup Status Report</h3>
+            <button id="closeBackupStatusTop" style="background: transparent; border: 1px solid #ddd; color: #666; font-size: 1.1em; cursor: pointer; padding: 2px 8px; border-radius: 4px; line-height: 1;">✕</button>
+          </div>
+          <div style="padding: 12px 20px 20px; overflow-y: auto; flex: 1; min-height: 0;">
           
           <details style="margin-bottom: 12px; font-size: 0.85em;">
             <summary style="cursor: pointer; color: #666; padding: 4px 0;">ℹ️ Legend (click to expand)</summary>
-            <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
-              <span>✅ Up to Date (full backup)</span>
-              <span>🔄 Updated (needs re-backup)</span>
-              <span>⭕ Not Backed Up</span>
-              <span>⚠️ Partial backup</span>
-              <span>📌 Legacy (old format)</span>
-              <span>📥 Manual Import</span>
+            <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 6px; font-size: 0.9em;">
+              <div style="margin-bottom: 6px; font-weight: 600;">Backup status:</div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px;">
+                <span>✅ Up to Date</span>
+                <span>🔄 Updated (needs re-backup)</span>
+                <span>⭕ Not Backed Up</span>
+                <span>⚠️ Partial backup</span>
+              </div>
+              <div style="margin-top: 8px; font-weight: 600;">Source icons (per conversation):</div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px;">
+                <span>🔍 Click-Captured</span>
+                <span>🔄 Auto-Backup</span>
+                <span>📥 Manual Import</span>
+                <span>💾 Full Backup (downloaded)</span>
+              </div>
             </div>
           </details>
+          
+          <div style="background: #e3f2fd; border-left: 4px solid #1565c0; padding: 10px; margin-bottom: 12px; border-radius: 4px; font-size: 0.85em;">
+            <strong>📋 Recommended workflow:</strong><br>
+            1️⃣ <strong>Capture All</strong> — get full content from sidebar<br>
+            2️⃣ <strong>Full Backup</strong> — download as .md files<br>
+            3️⃣ <strong>Import</strong> — bring back old backups
+          </div>
           
           <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; text-align: center; margin-bottom: 15px;">
@@ -2708,10 +2870,17 @@ document
             </div>
           </div>
           
-          ${(autoBackupCount > 0 || manualImportCount > 0) ? `
+          ${(autoBackupCount > 0 || manualImportCount > 0 || capturedCount > 0) ? `
           <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; margin-bottom: 15px;">
-            <div style="font-weight: 600; color: #2e7d32; margin-bottom: 8px;">📦 Additional Backup Sources</div>
-            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+            <div style="font-weight: 600; color: #2e7d32; margin-bottom: 8px;">📦 Backup Sources</div>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+              ${capturedCount > 0 ? `
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 1.2em;">🔍</span>
+                <span style="font-weight: 500; color: #6f42c1;">${capturedCount}</span>
+                <span style="color: #666; font-size: 0.9em;">Captured</span>
+              </div>
+              ` : ''}
               ${autoBackupCount > 0 ? `
               <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="font-size: 1.2em;">🔄</span>
@@ -2799,18 +2968,35 @@ document
                   statusLabel = "Can Upgrade";
                 }
 
-                const safeTitle = escapeHTML(conversation.title?.substring(0, 45) || "Untitled");
-                const titleSuffix = (conversation.title?.length || 0) > 45 ? "..." : "";
+                const safeTitle = escapeHTML(conversation.title?.substring(0, 35) || "Untitled");
+                const titleSuffix = (conversation.title?.length || 0) > 35 ? "..." : "";
                 const safeLabel = escapeHTML(status.label || '');
+                
+                // Cross-match this conversation against all backup sources
+                const normTitle = normalizeTitle(conversation.title);
+                const inCaptured = !!capturedByTitle[normTitle];
+                const inAutoBackup = !!autoBackupByTitle[normTitle];
+                const inManualImport = !!importByTitle[normTitle];
+                const inFullBackup = status.status === "up-to-date" && status.backupType === "main_content";
+                
+                // Build source icons string
+                const sourceIcons = [];
+                if (inCaptured) sourceIcons.push('<span title="Click-Captured" style="cursor:help;">🔍</span>');
+                if (inAutoBackup) sourceIcons.push('<span title="Auto-Backup" style="cursor:help;">🔄</span>');
+                if (inManualImport) sourceIcons.push('<span title="Manual Import" style="cursor:help;">📥</span>');
+                if (inFullBackup) sourceIcons.push('<span title="Full Backup" style="cursor:help;">💾</span>');
+                const sourceIconsHTML = sourceIcons.length > 0 ? sourceIcons.join('') : '<span style="color:#ccc;">—</span>';
+                
                 return `
-                <div style="padding: 10px; border-bottom: 1px solid #eee; font-size: 0.9em;">
-                  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                    <span style="font-size: 1.2em;">${status.icon || "⭕"}</span>
-                    <strong style="flex: 1; color: #333;">${safeTitle}${titleSuffix}</strong>
-                    <span style="background: ${status.color || "#999"}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; font-weight: bold;">${statusLabel}</span>
+                <div style="padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 0.85em;">
+                  <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 3px;">
+                    <span style="font-size: 1.1em;">${status.icon || "⭕"}</span>
+                    <strong style="flex: 1; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeTitle}${titleSuffix}</strong>
+                    <span style="font-size: 0.95em; white-space: nowrap;">${sourceIconsHTML}</span>
                   </div>
-                  <div style="color: #999; font-size: 0.85em;">
-                    ${safeLabel}
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="background: ${status.color || "#999"}; color: white; padding: 1px 6px; border-radius: 10px; font-size: 0.7em; font-weight: bold;">${statusLabel}</span>
+                    <span style="color: #999; font-size: 0.8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeLabel}</span>
                   </div>
                 </div>
               `;
@@ -2820,6 +3006,7 @@ document
 
           <div style="text-align: right; margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee;">
             <button id="closeBackupStatus" style="background: #007bff; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 0.95em; font-weight: 500;">Close</button>
+          </div>
           </div>
         </div>
       </div>
@@ -2831,6 +3018,12 @@ document
 
       modalElement
         .querySelector("#closeBackupStatus")
+        .addEventListener("click", () => {
+          document.body.removeChild(modalElement);
+        });
+
+      modalElement
+        .querySelector("#closeBackupStatusTop")
         .addEventListener("click", () => {
           document.body.removeChild(modalElement);
         });
@@ -2941,12 +3134,12 @@ document.getElementById("viewHistory").addEventListener("click", async () => {
     // Render initial list
     renderHistoryList();
 
-    modal.style.display = "block";
+    modal.style.display = "flex";
   } catch (error) {
     console.error("Error loading history:", error);
     document.getElementById("historyList").innerHTML =
       '<p style="color: red;">Error loading backup history.</p>';
-    modal.style.display = "block";
+    modal.style.display = "flex";
   }
 });
 
@@ -2959,12 +3152,236 @@ document.getElementById("closeHistory").addEventListener("click", () => {
   document.getElementById("historyModal").style.display = "none";
 });
 
+document.getElementById("closeHistoryTop").addEventListener("click", () => {
+  document.getElementById("historyModal").style.display = "none";
+});
+
+// Captured Chats modal handlers
+try {
+document.getElementById("viewCaptured").addEventListener("click", async () => {
+  const captured = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+  const list = document.getElementById("capturedList");
+  const entries = Object.entries(captured || {});
+  
+  if (entries.length === 0) {
+    list.innerHTML = '<div style="text-align: center; color: #666; padding: 30px;">No captured chats yet.<br><br><span style="font-size: 0.9em;">Click on chats in Duck.ai\'s sidebar to auto-capture them.</span></div>';
+    document.getElementById("exportAllCaptured").style.display = "none";
+    document.getElementById("clearAllCaptured").style.display = "none";
+  } else {
+    document.getElementById("exportAllCaptured").style.display = "";
+    document.getElementById("clearAllCaptured").style.display = "";
+    let html = `<div style="font-size: 0.8em; color: #666; margin-bottom: 10px;">🔍 ${entries.length} chats captured by click-detection</div>`;
+    for (const [key, entry] of entries) {
+      const date = new Date(entry.capturedAt).toLocaleString();
+      const preview = (entry.content || '')
+        .replace(/^Anonymized by DuckDuckGo[^\n]*\n*/i, '')
+        .replace(/^Zero (provider visibility|data retention)[^\n]*\n*/i, '')
+        .replace(/^Limited data retention[^\n]*\n*/i, '')
+        .replace(/^No AI training[^\n]*\n*/i, '')
+        .replace(/^Learn more[^\n]*\n*/i, '')
+        .replace(/^All chats are private[^\n]*\n*/i, '')
+        .replace(/^AI can make mistakes[^\n]*\n*/i, '')
+        .substring(0, 80).replace(/</g, '&lt;');
+      html += '<div style="background: #f8f0ff; border: 1px solid #d4b8ff; border-radius: 4px; padding: 10px; margin-bottom: 8px;">' +
+        '<div style="font-weight: 600; color: #6f42c1;">' + (entry.title || 'Untitled').substring(0, 60).replace(/</g, '&lt;') + '</div>' +
+        '<div style="font-size: 0.75em; color: #666; margin: 4px 0;">📅 Captured: ' + date + ' | ' + (entry.messageCount || '?') + ' messages | ' + (entry.content?.length || 0) + ' chars</div>' +
+        '<div style="font-size: 0.8em; color: #888; margin-top: 6px; padding: 6px; background: #fafafa; border-radius: 3px; max-height: 40px; overflow: hidden;">' + preview + '...</div>' +
+        '<div style="margin-top: 8px; display: flex; gap: 6px;">' +
+        '<button class="export-captured-btn" data-key="' + key + '" style="font-size: 0.75em; padding: 4px 10px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer;">📥 Export</button>' +
+        '</div>' +
+        '</div>';
+    }
+    list.innerHTML = html;
+    
+    document.querySelectorAll('.export-captured-btn').forEach(btn => {
+      btn.addEventListener('click', () => exportCapturedChat(btn.dataset.key));
+    });
+  }
+  
+  document.getElementById("capturedModal").style.display = "flex";
+});
+
+document.getElementById("closeCapturedModal").addEventListener("click", () => {
+  document.getElementById("capturedModal").style.display = "none";
+});
+
+document.getElementById("closeCapturedModalTop").addEventListener("click", () => {
+  document.getElementById("capturedModal").style.display = "none";
+});
+
+document.getElementById("clearAllCaptured").addEventListener("click", async () => {
+  if (confirm('Clear all click-captured chats? This cannot be undone.')) {
+    await browser.runtime.sendMessage({ type: 'clear_captured_chats' });
+    document.getElementById("capturedList").innerHTML = '<div style="text-align: center; color: #666; padding: 30px;">All captured chats cleared.</div>';
+    document.getElementById("exportAllCaptured").style.display = "none";
+    document.getElementById("clearAllCaptured").style.display = "none";
+    statusEl.textContent = '🗑️ Cleared all captured chats';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  }
+});
+
+document.getElementById("exportAllCaptured").addEventListener("click", async () => {
+  const captured = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+  const entries = Object.entries(captured || {});
+  if (entries.length === 0) {
+    statusEl.textContent = '❌ No captured chats to export';
+    return;
+  }
+  
+  const folder = await getDownloadFolder();
+  const date = new Date().toISOString().split('T')[0];
+  const obsidianEnabled = document.getElementById('obsidianFrontmatter')?.checked;
+  let exported = 0;
+  
+  for (const [key, entry] of entries) {
+    const cleanTitle = (entry.title || 'untitled').replace(/[^\w\s-]/g, '').replace(/\s+/g, '_').substring(0, 40);
+    const filename = `${folder}/duckai_captured_${date}_${String(++exported).padStart(3, '0')}_${cleanTitle}.md`;
+    
+    let content = obsidianEnabled ? `---\ntags:\n  - duckduckgo\n  - click-captured\ndate: ${date}\n---\n\n` : '';
+    content += `# ${entry.title}\n\n*Click-captured: ${new Date(entry.capturedAt).toLocaleString()}*\n\n---\n\n${entry.content}`;
+    
+    try {
+      const blob = new Blob([content], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const downloadId = await browser.downloads.download({ url: url, filename: filename, saveAs: false });
+      // Revoke after download completes
+      browser.downloads.onChanged.addListener(function handler(delta) {
+        if (delta.id === downloadId && (delta.state?.current === 'complete' || delta.state?.current === 'interrupted')) {
+          URL.revokeObjectURL(url);
+          browser.downloads.onChanged.removeListener(handler);
+        }
+      });
+      // Small delay to avoid Firefox download rate limiting
+      if (exported % 5 === 0) await new Promise(r => setTimeout(r, 500));
+    } catch (error) {
+      console.error('Export error:', error);
+      // On rate limit, wait longer and retry
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  
+  statusEl.textContent = `✅ Exported ${exported} captured chats`;
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+});
+
+async function exportCapturedChat(key) {
+  const captured = await browser.runtime.sendMessage({ type: 'get_captured_chats' });
+  const entry = captured[key];
+  if (!entry) return;
+  
+  const folder = await getDownloadFolder();
+  const date = new Date().toISOString().split('T')[0];
+  const cleanTitle = (entry.title || 'untitled').replace(/[^\w\s-]/g, '').replace(/\s+/g, '_').substring(0, 40);
+  const filename = `${folder}/duckai_captured_${date}_${cleanTitle}.md`;
+  
+  const obsidianEnabled = document.getElementById('obsidianFrontmatter')?.checked;
+  let content = obsidianEnabled ? `---\ntags:\n  - duckduckgo\n  - click-captured\ndate: ${date}\n---\n\n` : '';
+  content += `# ${entry.title}\n\n*Click-captured: ${new Date(entry.capturedAt).toLocaleString()}*\n\n---\n\n${entry.content}`;
+  
+  try {
+    const blob = new Blob([content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const downloadId = await browser.downloads.download({ url: url, filename: filename, saveAs: false });
+    browser.downloads.onChanged.addListener(function handler(delta) {
+      if (delta.id === downloadId && (delta.state?.current === 'complete' || delta.state?.current === 'interrupted')) {
+        URL.revokeObjectURL(url);
+        browser.downloads.onChanged.removeListener(handler);
+      }
+    });
+    statusEl.textContent = `✅ Exported: ${entry.title?.substring(0, 30)}`;
+  } catch (error) {
+    statusEl.textContent = `❌ Export failed`;
+  }
+}
+} catch (e) {
+  console.log('Captured chat UI not available:', e);
+}
+
+// Auto-Capture All: clicks through every sidebar chat and extracts content directly
+let captureCancelled = false;
+
+try {
+document.getElementById("cancelCapture").addEventListener("click", () => {
+  captureCancelled = true;
+  document.getElementById("captureOverlay").style.display = "none";
+});
+
+document.getElementById("autoCaptureAll").addEventListener("click", async () => {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab.url?.includes('duck.ai')) {
+    statusEl.textContent = 'Not on duck.ai';
+    return;
+  }
+  
+  statusEl.textContent = 'Starting capture on duck.ai page...';
+  
+  // First inject the floating capture UI
+  await browser.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: function() {
+      // Remove any existing capture UI
+      const existing = document.getElementById('duckai-capture-ui');
+      if (existing) existing.remove();
+
+      // Create floating capture panel
+      const captureUI = document.createElement('div');
+      captureUI.id = 'duckai-capture-ui';
+      captureUI.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 320px;
+        background: white;
+        border: 2px solid #e83e8c;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        z-index: 10000;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+      `;
+
+      captureUI.innerHTML = `
+        <div style="font-weight: 600; color: #e83e8c; margin-bottom: 10px;"> Auto-Capture All Chats</div>
+        <div style="color: #666; font-size: 12px; margin-bottom: 12px;">Keep this window open until finished!</div>
+        <div style="background: #f0f0f0; border-radius: 4px; height: 8px; margin-bottom: 8px; position: relative;">
+          <div id="capture-progress-bar" style="background: linear-gradient(90deg, #e83e8c, #ff6b9d); height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+        </div>
+        <div id="capture-status" style="color: #333; font-size: 13px; margin-bottom: 12px;">Finding chats...</div>
+        <div id="capture-detail" style="color: #666; font-size: 12px; margin-bottom: 12px; min-height: 16px;"></div>
+        <button id="capture-cancel" style="background: #dc3545; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">Cancel</button>
+        <button id="capture-continue" style="background: #28a745; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 8px; display: none;">▶ Continue</button>
+        <button id="capture-close" style="background: #6c757d; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 8px; display: none;">Close</button>
+      `;
+
+      document.body.appendChild(captureUI);
+    }
+  });
+
+  // Then inject the capture script
+  // Firefox resolves 'files' paths relative to the calling script (popup/), so use ../ to reach extension root
+  await browser.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ["../sidebar-capture.js"]
+  });
+  
+  statusEl.textContent = 'Capture UI injected! Check duck.ai page.';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+});
+} catch (e) {
+  console.log('Auto-capture button not available:', e);
+}
+
 // Help modal handlers
 document.getElementById("showHelp").addEventListener("click", () => {
-  document.getElementById("helpModal").style.display = "block";
+  document.getElementById("helpModal").style.display = "flex";
 });
 
 document.getElementById("closeHelp").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "none";
+});
+
+document.getElementById("closeHelpTop").addEventListener("click", () => {
   document.getElementById("helpModal").style.display = "none";
 });
 
@@ -3014,7 +3431,7 @@ document.getElementById("clearHistory").addEventListener("click", async () => {
         statusEl.textContent = "Backup history cleared successfully";
 
         const historyModal = document.getElementById("historyModal");
-        if (historyModal.style.display === "block") {
+        if (historyModal.style.display === "flex") {
           document.getElementById("viewHistory").click();
         }
       } catch (error) {

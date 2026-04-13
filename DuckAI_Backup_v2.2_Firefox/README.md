@@ -1,8 +1,27 @@
-# Duck.AI Backup Extension (v2.2.0)
+# Duck.AI Backup Extension (v2.2.1)
 
 A browser extension to backup and export your conversations from [duck.ai](https://duck.ai).
 
-## ✨ What's New in v2.2.0
+## ✨ What's New in v2.2.1
+
+**Bug Fixes:**
+- 🐛 Fixed export of captured chats — downloads no longer fail when popup closes (blob URLs revoked after download completes)
+- 🐛 Fixed Export All getting stuck at ~24 files due to Firefox rate limiting (added delays between batch downloads)
+- 🐛 Fixed all modals showing on load (duplicate CSS `display` property conflict)
+- 🐛 Hidden "Export All" / "Clear All" buttons when captured list is empty
+
+**UI Improvements:**
+- ✕ Sticky close buttons at top of every modal — no more scrolling to close
+- 📋 Unified workflow panel: Capture All → Full Backup → Auto-Backup → Import
+- 📊 Backup Status Report now cross-matches conversations across all sources with icons:
+  - 🔍 Click-Captured | 🔄 Auto-Backup | 📥 Manual Import | 💾 Full Backup
+- 🎨 All modals properly sized to fit within popup (396px × 550px)
+
+**New Features:**
+- 🔄 Capture All acts as full refresh — stale entries (deleted/renamed chats) are automatically removed
+- ⏸️ Pause/Resume capture — Cancel pauses, Continue resumes from where it stopped
+
+## What's New in v2.2.0
 
 **Auto-Backup Feature:**
 - ⏰ **Automatic backups** - Saves conversations every 5/10/15/30 minutes while on duck.ai
@@ -60,13 +79,14 @@ A browser extension to backup and export your conversations from [duck.ai](https
 
 | Control | Description |
 |---------|-------------|
+| **🔍 Capture All** | Auto-capture full content from all sidebar chats |
+| **💾 Full Backup** | Download all conversations as .md files |
 | **Toggle All** | Select/deselect all conversations |
-| **Load Chat-titles** | Extract conversations from localStorage (double-click to force refresh) |
-| **Download .md** | Export selected conversations as Markdown files |
-| **Full Backup Mode** | Auto-download all conversations at once |
-| **Clear Cache** | Remove cached data (forces fresh extraction) |
-| **View Downloads** | See previous manual backup downloads |
-| **📊 Backup Status** | View detailed breakdown of backups |
+| **⚡ Quick Download** | Download currently open conversation |
+| **🔍 Captured** | View click-captured chats |
+| **📊 Backup Status** | View cross-source backup status with icons |
+| **🔄 Auto-Backup** | Enable periodic auto-saving of conversations |
+| **� Manual Import** | Import old Duck.ai export files |
 
 ## Visual Indicators
 
@@ -76,8 +96,10 @@ A browser extension to backup and export your conversations from [duck.ai](https
 | 🔄 | Updated (needs re-backup) |
 | ⭕ | Not backed up yet |
 | ⚠️ | Partial backup (from older version) |
-| 📌 | Legacy backup (old format) |
-| 📥 | Manual import |
+| � | Click-Captured source |
+| 🔄 | Auto-Backup source |
+| 📥 | Manual Import source |
+| 💾 | Full Backup (downloaded) source |
 
 ## Settings
 
@@ -134,5 +156,8 @@ backup_type: FULL
 - Brave (Manifest V3)
 
 ## License
-
 MIT - Use responsibly and respect Duck.ai's terms of service.
+
+## Credits
+This extension was developed with significant assistance from AI coding tools (Claude/Cascade).
+Ideas, testing, debugging, and project direction by Stefan.

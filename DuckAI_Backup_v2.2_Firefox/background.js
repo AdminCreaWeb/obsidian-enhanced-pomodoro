@@ -19,6 +19,35 @@ const DEFAULT_AUTO_BACKUP_SETTINGS = {
 // Alarm name for periodic backup
 const AUTO_BACKUP_ALARM = 'autoBackupAlarm';
 
+// Storage key for click-captured chats
+const CAPTURED_CHATS_KEY = 'capturedChats';
+
+// Store a chat captured by click-detection
+async function storeCapturedChat(chatData) {
+  if (!chatData || !chatData.title) return;
+  
+  const result = await browser.storage.local.get([CAPTURED_CHATS_KEY]);
+  const captured = result[CAPTURED_CHATS_KEY] || {};
+  
+  // Use title hash as key to avoid duplicates
+  const key = chatData.title.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+  
+  if (captured[key]) {
+    // Update existing entry if new content is longer
+    if (chatData.content.length > captured[key].content.length) {
+      captured[key] = chatData;
+      console.log(`🔍 Updated captured chat: "${chatData.title.substring(0, 40)}..."`);
+    } else {
+      console.log(`🔍 Already captured: "${chatData.title.substring(0, 40)}..."`);
+    }
+  } else {
+    captured[key] = chatData;
+    console.log(`🔍 New captured chat: "${chatData.title.substring(0, 40)}..." (${chatData.messageCount} messages)`);
+  }
+  
+  await browser.storage.local.set({ [CAPTURED_CHATS_KEY]: captured });
+}
+
 // Initialize on install
 browser.runtime.onInstalled.addListener(async () => {
   console.log('🦆 DuckDuckGo AI Backup extension installed');
@@ -315,6 +344,26 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'set_auto_backup_data_direct':
       // Direct set for import feature
       browser.storage.local.set({ [AUTO_BACKUP_DATA_KEY]: message.data }).then(() => {
+        sendResponse({ success: true });
+      });
+      return true;
+      
+    case 'store_captured_chat':
+      // Store a chat captured by click-detection from chat-capture.js
+      storeCapturedChat(message.payload).then(() => {
+        sendResponse({ success: true });
+      });
+      return true;
+      
+    case 'get_captured_chats':
+      browser.storage.local.get(['capturedChats']).then(result => {
+        sendResponse(result.capturedChats || {});
+      });
+      return true;
+      
+    case 'clear_captured_chats':
+      browser.storage.local.set({ capturedChats: {} }).then(() => {
+        console.log('🔍 Cleared all captured chats');
         sendResponse({ success: true });
       });
       return true;
